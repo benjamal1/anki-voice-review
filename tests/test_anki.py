@@ -7,7 +7,8 @@ import urllib.error
 import pytest
 
 from avr import anki as anki_mod
-from avr.anki import AnkiConnect, AnkiError, AnkiNotRunning, Card, NoCardShowing
+from avr.anki import AnkiConnect, AnkiError, AnkiNotRunning, NoCardShowing
+from avr.cards import Card
 
 BASIC_PAYLOAD = {
     "cardId": 1234,

@@ -12,10 +12,9 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from typing import Any
 
-from .cards import answer_text, strip_html
+from .cards import Card
 
 
 NO_CARD_ADVICE = (
@@ -34,27 +33,6 @@ class AnkiNotRunning(AnkiError):
 
 class NoCardShowing(AnkiError):
     """Anki is running, but no card is up in the reviewer."""
-
-
-@dataclass(frozen=True)
-class Card:
-    card_id: int
-    question: str  # spoken aloud
-    answer: str  # graded against
-    raw_question_html: str
-    raw_answer_html: str
-
-    @classmethod
-    def from_gui_current_card(cls, payload: dict[str, Any]) -> "Card":
-        q_html = payload.get("question", "") or ""
-        a_html = payload.get("answer", "") or ""
-        return cls(
-            card_id=int(payload.get("cardId", 0)),
-            question=strip_html(q_html),
-            answer=answer_text(q_html, a_html),
-            raw_question_html=q_html,
-            raw_answer_html=a_html,
-        )
 
 
 class AnkiConnect:

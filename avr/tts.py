@@ -16,10 +16,11 @@ on every single card, not as an edge case. Two defences, because either alone le
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import time
-from typing import Protocol
+from typing import Optional, Protocol
+
+from .stt import resolve_binary
 
 log = logging.getLogger(__name__)
 
@@ -40,13 +41,13 @@ class Speaker:
         self.muted_until = 0.0
 
     def preflight(self) -> None:
-        if shutil.which("say") is None:
+        if resolve_binary("say") is None:
             raise SpeakerError(
                 "`say` not found. This project is macOS-only; run it on the Mac where Anki lives."
             )
 
     def _command(self, text: str) -> list[str]:
-        cmd = ["say"]
+        cmd = [resolve_binary("say") or "say"]
         if self._voice:
             cmd += ["-v", self._voice]
         if self._rate:

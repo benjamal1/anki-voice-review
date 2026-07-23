@@ -143,6 +143,9 @@ def grade(question: str, answer: str, transcript: str, cfg: Config) -> Verdict:
     if score < cfg.fuzzy_wrong:
         return Verdict(False, score, "fuzzy", "clearly different")
 
+    if not cfg.use_judge:
+        return Verdict(False, score, "fuzzy-only", "judge disabled, ambiguous band")
+
     judged = ask_judge(question, answer, transcript, cfg)
     if judged is None:
         # Nothing better available. Bias the ambiguous band toward "wrong" so a card you may

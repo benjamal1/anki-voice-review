@@ -1,0 +1,15 @@
+{
+  "terminator": "done",
+  "override_window_seconds": 2.5,
+  "use_llm_judge": true,
+  "fuzzy_correct": 0.75,
+  "fuzzy_wrong": 0.4,
+  "whisper_binary": "whisper-stream",
+  "whisper_model": "~/whisper-models/ggml-base.en.bin",
+  "say_voice": "",
+  "say_rate": "190",
+  "echo_tail_seconds": 0.35,
+  "ollama_url": "http://127.0.0.1:11434",
+  "ollama_model": "qwen2.5:3b",
+  "judge_timeout_seconds": 12.0
+}

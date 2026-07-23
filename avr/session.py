@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from typing import Union
 
-from .anki import Card
-from .cards import normalize
+from .cards import Card, normalize
 from .config import EASE_AGAIN, EASE_BY_NAME, EASE_GOOD, Config
 from .grade import Verdict
 
@@ -62,7 +62,9 @@ class Quit:
     pass
 
 
-Intent = Speak | ShowAnswer | AnswerCard | NextCard | StartOverrideTimer | Quit
+# typing.Union, not `A | B`: this is a runtime expression, and Anki 25.02.5 bundles Python 3.9
+# where `|` on classes raises TypeError. The add-on imports this module inside Anki.
+Intent = Union[Speak, ShowAnswer, AnswerCard, NextCard, StartOverrideTimer, Quit]
 
 
 def match_command(line: str) -> str | None:

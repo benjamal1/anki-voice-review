@@ -72,6 +72,38 @@ class Config:
     # --- Session ---
     terminator: str = field(default_factory=lambda: _env_str("AVR_TERMINATOR", "done"))
     override_window_s: float = field(default_factory=lambda: _env_float("AVR_OVERRIDE_WINDOW", 2.5))
+    # Turning the judge off makes grading purely mechanical: faster, and never wrong in a way
+    # you cannot predict, at the cost of marking reworded answers incorrect.
+    use_judge: bool = True
+
+    @classmethod
+    def from_mapping(cls, data: dict) -> "Config":
+        """Build from Anki's add-on config (config.json), falling back to defaults per key.
+
+        The add-on has no environment to read, so this is how the settings dialog feeds the
+        same Config object the CLI builds from environment variables.
+        """
+        defaults = cls()
+
+        def pick(key: str, fallback):
+            value = data.get(key)
+            return fallback if value is None or value == "" else value
+
+        return cls(
+            whisper_bin=str(pick("whisper_binary", defaults.whisper_bin)),
+            whisper_model=Path(str(pick("whisper_model", defaults.whisper_model))).expanduser(),
+            say_voice=str(data.get("say_voice") or ""),
+            say_rate=str(pick("say_rate", defaults.say_rate)),
+            echo_tail_s=float(pick("echo_tail_seconds", defaults.echo_tail_s)),
+            fuzzy_correct=float(pick("fuzzy_correct", defaults.fuzzy_correct)),
+            fuzzy_wrong=float(pick("fuzzy_wrong", defaults.fuzzy_wrong)),
+            ollama_url=str(pick("ollama_url", defaults.ollama_url)),
+            ollama_model=str(pick("ollama_model", defaults.ollama_model)),
+            judge_timeout_s=float(pick("judge_timeout_seconds", defaults.judge_timeout_s)),
+            terminator=str(pick("terminator", defaults.terminator)),
+            override_window_s=float(pick("override_window_seconds", defaults.override_window_s)),
+            use_judge=bool(data.get("use_llm_judge", True)),
+        )
 
     def validate(self) -> list[str]:
         """Return human-readable problems. Empty list means good to go."""

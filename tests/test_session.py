@@ -2,7 +2,7 @@
 
 import pytest
 
-from avr.anki import Card
+from avr.cards import Card
 from avr.config import EASE_AGAIN, EASE_EASY, EASE_GOOD, EASE_HARD, Config
 from avr.grade import Verdict
 from avr.session import (

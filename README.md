@@ -6,6 +6,28 @@ mouse, no screen.
 Everything runs locally on the Mac: Anki, the microphone, whisper.cpp, `say`, and Ollama.
 Nothing leaves the machine and there is no cloud service anywhere in the loop.
 
+Ships as an **Anki add-on** with a UI. There is also a CLI for testing and scripting.
+
+## Install the add-on
+
+1. Build it (or use a prebuilt `dist/anki-voice-review.ankiaddon`):
+
+   ```sh
+   python3 build_addon.py
+   ```
+
+2. In Anki: **Tools → Add-ons → Install from file…**, pick
+   `dist/anki-voice-review.ankiaddon`, then restart Anki.
+
+3. Open a deck and click **Study Now**, then **Tools → Voice Review** (`Ctrl+Shift+V`) and
+   press **Start**.
+
+The first run triggers a macOS microphone prompt on Anki's behalf. Allow it once. Anki already
+declares microphone usage and holds the `com.apple.security.device.audio-input` entitlement, so
+the `whisper-stream` process it spawns inherits that grant.
+
+Settings live in the window itself (**Settings…**) and in **Tools → Add-ons → Config**.
+
 ## Requirements
 
 macOS, plus:
@@ -26,8 +48,8 @@ uv run avr doctor    # checks all of the above and tells you how to fix what's m
 
 ## Use
 
-Open Anki, pick a deck, click **Study Now** so a card is showing. Then, **in Terminal.app on
-the Mac** (not over SSH — macOS will not grant microphone access to an SSH session):
+In the add-on window, press **Start**. Or from the CLI, **in Terminal.app on the Mac** (not over
+SSH — macOS will not grant microphone access to an SSH session):
 
 ```sh
 uv run avr review
@@ -103,8 +125,17 @@ intents; it never touches audio, Anki, or the network. That is where the tests c
 `runner.py` is the thin part that performs the I/O.
 
 ```sh
-uv run pytest    # 101 tests, no hardware or network required
+uv run pytest         # no hardware or network required
+python3 build_addon.py  # also syntax-checks every vendored module against Python 3.9
 ```
+
+**The add-on targets Python 3.9.** Anki 25.02.5 bundles it, so `X | Y` unions at runtime and
+other 3.10+ syntax fail to load. The build script compiles every vendored module with a real
+3.9 interpreter and refuses to package if anything would not parse.
+
+**Anki work happens on the GUI thread.** The voice loop runs on a worker thread; every reviewer
+call is marshalled back via `mw.taskman.run_on_main`. Touching the collection from a background
+thread corrupts state in ways that surface much later.
 
 ## Not supported
 

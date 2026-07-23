@@ -11,6 +11,7 @@ can be swapped later without the session state machine knowing anything changed.
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import re
 import shutil
@@ -36,6 +37,26 @@ NOISE_LINES = {
 NON_SPEECH = re.compile(r"^\s*[\[(][^\])]*[\])]\s*$")
 
 
+# A GUI app launched from Finder inherits a minimal PATH — no /opt/homebrew/bin — so inside the
+# Anki add-on `shutil.which("whisper-stream")` finds nothing even though it is installed. Look in
+# the usual Homebrew locations too rather than making the user hand-edit an absolute path.
+EXTRA_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
+
+
+def resolve_binary(name: str) -> str | None:
+    """Absolute path to `name`, searching PATH and the standard Homebrew prefixes."""
+    if os.path.isabs(name):
+        return name if os.access(name, os.X_OK) else None
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in EXTRA_BIN_DIRS:
+        candidate = os.path.join(directory, name)
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def clean_line(raw: str) -> str:
     """Strip control codes and non-speech markers. Returns '' for anything not worth hearing."""
     text = ANSI.sub("", raw).strip()
@@ -55,6 +76,7 @@ class Transcriber:
 
     def __init__(self, binary: str, model: Path, language: str = "en") -> None:
         self._binary = binary
+        self._resolved_binary = binary
         self._model = model
         self._language = language
         self._process: subprocess.Popen[str] | None = None
@@ -64,10 +86,12 @@ class Transcriber:
 
     def preflight(self) -> None:
         """Fail loudly and specifically before a session starts, not with a raw traceback."""
-        if shutil.which(self._binary) is None:
+        resolved = resolve_binary(self._binary)
+        if resolved is None:
             raise TranscriberError(
-                f"{self._binary!r} not found on PATH. Install whisper.cpp: brew install whisper-cpp"
+                f"{self._binary!r} not found. Install whisper.cpp: brew install whisper-cpp"
             )
+        self._resolved_binary = resolved
         if not self._model.exists():
             raise TranscriberError(
                 f"Whisper model not found at {self._model}. Download it with:\n"
@@ -79,7 +103,7 @@ class Transcriber:
         self.preflight()
         self._process = subprocess.Popen(
             [
-                self._binary,
+                self._resolved_binary,
                 "-m", str(self._model),
                 "-l", self._language,
                 # --step 0 switches from a fixed sliding window to VAD-driven emission: it

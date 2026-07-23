@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from html.parser import HTMLParser
+from typing import Any
 
 ANSWER_SEPARATOR = re.compile(r"<hr\s+id=[\"']?answer[\"']?\s*/?>", re.IGNORECASE)
 SOUND_TAG = re.compile(r"\[sound:[^\]]*\]", re.IGNORECASE)
@@ -129,3 +131,38 @@ def answer_text(question_html: str, answer_html: str) -> str:
         if remainder:
             return remainder
     return answer
+
+
+@dataclass(frozen=True)
+class Card:
+    """A card reduced to the two strings the review loop cares about.
+
+    Lives here rather than beside the AnkiConnect client so the session state machine — and
+    the Anki add-on, which has no AnkiConnect at all — can use it without dragging in an HTTP
+    client they will never call.
+    """
+
+    card_id: int
+    question: str  # spoken aloud
+    answer: str  # graded against
+    raw_question_html: str = ""
+    raw_answer_html: str = ""
+
+    @classmethod
+    def from_html(cls, card_id: int, question_html: str, answer_html: str) -> "Card":
+        question_html = question_html or ""
+        answer_html = answer_html or ""
+        return cls(
+            card_id=int(card_id or 0),
+            question=strip_html(question_html),
+            answer=answer_text(question_html, answer_html),
+            raw_question_html=question_html,
+            raw_answer_html=answer_html,
+        )
+
+    @classmethod
+    def from_gui_current_card(cls, payload: dict) -> "Card":
+        """Build from an AnkiConnect `guiCurrentCard` result."""
+        return cls.from_html(
+            payload.get("cardId", 0), payload.get("question", ""), payload.get("answer", "")
+        )
