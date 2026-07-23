@@ -18,6 +18,12 @@ from typing import Any
 from .cards import answer_text, strip_html
 
 
+NO_CARD_ADVICE = (
+    "Anki is running, but no card is showing. Open a deck and click Study Now so a card is "
+    "up in the reviewer, then run this again."
+)
+
+
 class AnkiError(RuntimeError):
     """AnkiConnect reachable but unhappy, or not reachable at all."""
 
@@ -81,12 +87,17 @@ class AnkiConnect:
     # --- the three actions the loop actually uses ---
 
     def current_card(self) -> Card:
-        result = self.invoke("guiCurrentCard")
+        try:
+            result = self.invoke("guiCurrentCard")
+        except AnkiError as exc:
+            # AnkiConnect reports an idle reviewer as an error string, not a null result, so
+            # the "open a deck" case arrives here rather than below. Both must land on the
+            # same advice — the generic error text sends you looking for the wrong problem.
+            if "review is not currently active" in str(exc).lower():
+                raise NoCardShowing(NO_CARD_ADVICE) from exc
+            raise
         if not result:
-            raise NoCardShowing(
-                "Anki is running, but no card is showing. Open a deck and start reviewing, "
-                "then run this again."
-            )
+            raise NoCardShowing(NO_CARD_ADVICE)
         return Card.from_gui_current_card(result)
 
     def show_answer(self) -> None:
