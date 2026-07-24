@@ -86,6 +86,7 @@ class VoiceWorker(threading.Thread):
         self._override_deadline: Optional[float] = None
         self._last_card_id = 0
         self._pending_line: Optional[str] = None
+        self._spoke = False
 
     def request_stop(self) -> None:
         """Stop now, not at the end of the current sentence.
@@ -136,9 +137,11 @@ class VoiceWorker(threading.Thread):
                     # running the rest of this batch and let the loop handle them.
                     return False
             else:
-                # Blocking, then draining: on speakers the mic hears the TTS, so this is
-                # what stops whisper transcribing Anki's own voice as the user's answer.
-                self.tts.speak(intent.text, gate=self.stt)
+                # On speakers the mic hears the TTS. Speak blocks, then the loop drains the
+                # backlog before listening (see _spoke) — the model is speak, then listen,
+                # never listen-through-our-own-voice.
+                self.tts.speak(intent.text)
+                self._spoke = True
             if self.session.phase.name == "LISTENING":
                 self.on_phase(PHASE_LISTENING, "")
 
@@ -286,13 +289,22 @@ class VoiceWorker(threading.Thread):
             self._execute(self.session.begin_card(card))
 
             while not self._stopping.is_set():
+                # Everything heard while we were speaking on the speakers path is our own voice
+                # echoing back. Clear it once, here, rather than trying to tell it apart line by
+                # line — that is what let the answer's echo bury the user's "again"/"skip".
+                if self._spoke and not self.cfg.headphones:
+                    dropped = self.stt.drain()
+                    self._spoke = False
+                    if dropped:
+                        tracelog.write("drained-echo", f"{dropped} line(s)")
+
                 if self._pending_line is not None:
                     line, self._pending_line = self._pending_line, None
                 else:
                     line = self.stt.get(timeout=POLL_S)
 
                 if line:
-                    if is_echo(line, self.tts.last_spoken, self.cfg.command_words):
+                    if is_echo(line, self.tts.recent_spoken(), self.cfg.command_words):
                         # The machine hearing itself, not the user.
                         tracelog.write("echo-dropped", repr(line))
                         continue

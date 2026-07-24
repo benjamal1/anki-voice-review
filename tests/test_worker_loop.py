@@ -246,3 +246,29 @@ class TestQuit:
     def test_quit_stops_the_loop(self):
         bridge, _, _ = run_worker(["quit", "skip"])
         assert ("bury",) not in bridge.calls, "nothing should run after quit"
+
+
+class TestSpeakersEchoDoesNotBuryCommands:
+    """The reported failure: on speakers, the answer being read aloud is transcribed back and
+    clogs the queue, so the user's "again"/"skip" is stuck behind junk or lost. The word shows
+    in the dialog, nothing happens, no error."""
+
+    def test_a_command_after_echo_lines_still_fires(self):
+        # 'the powerhouse of the cell' is the card answer echoing back; 'again' is the user.
+        cfg = Config(grading_mode="manual")
+        cards = [Card(1, "what is the mitochondrion", "the powerhouse of the cell")]
+        bridge, errors, _ = run_worker(
+            ["my attempt done", "the powerhouse of the cell", "the powerhouse", "again"],
+            cfg=cfg,
+            cards=cards,
+        )
+        assert ("answer_card", 1) in bridge.calls, "the command was lost behind its own echo"
+        assert errors == []
+
+    def test_echoed_answer_is_recognised_as_echo(self):
+        from anki_voice_review.avr.tts import is_echo
+
+        recent = ["the powerhouse of the cell", "Your call"]
+        assert is_echo("the powerhouse of the cell", recent)
+        assert is_echo("the power house of the cell", recent)  # mangled TTS
+        assert not is_echo("again", recent)  # the user's reply survives

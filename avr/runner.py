@@ -185,7 +185,7 @@ class Runner:
                 line = self.stt.get(timeout=POLL_S)
 
                 if line:
-                    if is_echo(line, self.tts.last_spoken, self.cfg.command_words):
+                    if is_echo(line, self.tts.recent_spoken(), self.cfg.command_words):
                         continue
                     log.debug("heard: %s", line)
                     self._execute(self.session.on_line(line))

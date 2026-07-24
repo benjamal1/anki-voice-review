@@ -31,25 +31,26 @@ log = logging.getLogger(__name__)
 ECHO_SIMILARITY = 0.55
 
 
-def is_echo(line: str, spoken: str, command_words: dict | None = None) -> bool:
+def is_echo(line: str, spoken, command_words: dict | None = None) -> bool:
     """True when a transcript line is the computer hearing its own voice.
 
-    Content, not timing. The previous approach discarded every line that arrived shortly after
-    speaking, which threw away the user answering promptly — the single most common thing they
-    do. Comparing against what was actually said keeps the echo and keeps the user.
+    `spoken` may be a single string or a list of recent utterances. Because a batch can speak
+    several things (answer, then a prompt), matching only the last one let the earlier echo
+    through — which is what buried the user's reply on speakers. Matching any recent utterance
+    closes that.
 
-    A recognised command is never echo. Prompts naturally contain the words they are asking
-    for — "Good or again?" contains both — so without this exception the prompt would suppress
-    the very reply it just requested.
+    A recognised command is never echo. Prompts naturally contain the words they ask for, so
+    without this exception a prompt would suppress the very reply it requested.
     """
     from .grade import fuzzy_score
     from .session import match_command
 
-    if not spoken or not line:
+    if not line:
         return False
     if match_command(line, command_words):
         return False
-    return fuzzy_score(spoken, line) >= ECHO_SIMILARITY
+    candidates = [spoken] if isinstance(spoken, str) else list(spoken or [])
+    return any(c and fuzzy_score(c, line) >= ECHO_SIMILARITY for c in candidates)
 
 
 class Drainable(Protocol):
@@ -70,6 +71,7 @@ class Speaker:
         self._cancelled = False
         self._lock = threading.Lock()
         self.last_spoken = ""
+        self._recent: list = []  # last few utterances, for echo that leaks past the drain
 
     def interrupt(self) -> None:
         """Cut off whatever is being said, right now.
@@ -126,6 +128,8 @@ class Speaker:
         self.muted_until = time.monotonic() + self._echo_tail_s
         with self._lock:
             self.last_spoken = text
+            self._recent.append(text)
+            del self._recent[:-4]  # keep the last 4
         try:
             # Popen rather than run() so interrupt() has something to terminate.
             process = subprocess.Popen(
@@ -198,6 +202,10 @@ class Speaker:
     def is_muted(self) -> bool:
         return time.monotonic() < self.muted_until
 
+    def recent_spoken(self) -> list:
+        with self._lock:
+            return list(self._recent)
+
 
 class FakeSpeaker:
     """Records what would have been said. Same interface, no audio."""
@@ -207,6 +215,7 @@ class FakeSpeaker:
         self.muted_until = 0.0
         self.interrupted = False
         self.last_spoken = ""
+        self._recent: list = []
 
     def interrupt(self) -> None:
         self.interrupted = True
@@ -223,6 +232,9 @@ class FakeSpeaker:
     def is_speaking(self) -> bool:
         return False
 
+    def recent_spoken(self) -> list:
+        return list(self._recent)
+
     def preflight(self) -> None: ...
 
     def speak(self, text: str, gate: Drainable | None = None) -> None:
@@ -231,6 +243,8 @@ class FakeSpeaker:
             return
         self.said.append(text)
         self.last_spoken = text
+        self._recent.append(text)
+        del self._recent[:-4]
 
     @property
     def is_muted(self) -> bool:
