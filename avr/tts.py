@@ -116,6 +116,20 @@ class Speaker:
             process = self._process
         return process is not None and process.poll() is None
 
+    @property
+    def is_busy(self) -> bool:
+        """Speaking now, or something still queued to speak.
+
+        Queue-aware so it stays True in the gap between one utterance ending and the next
+        Popen starting — that gap is where a "wait until done speaking" check would otherwise
+        advance early, mid-answer.
+        """
+        with self._cond:
+            if self._queue:
+                return True
+            process = self._process
+        return process is not None and process.poll() is None
+
     def wait(self) -> None:
         """Block until the queue is empty and nothing is speaking. For the CLI/tests."""
         while True:
@@ -169,4 +183,8 @@ class FakeSpeaker:
 
     @property
     def is_speaking(self) -> bool:
+        return False
+
+    @property
+    def is_busy(self) -> bool:
         return False

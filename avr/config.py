@@ -182,6 +182,11 @@ class Config:
     # Speak "Correct"/"Incorrect" before moving on. Off saves roughly a second per card; the
     # verdict is on screen and a wrong answer still gets read back either way.
     announce_verdict: bool = True
+    # When auto mode reads the answer aloud: "never" (fastest, answer only on screen),
+    # "incorrect" (read it back only when you got it wrong — the useful case), or "always".
+    # Reading holds the advance to the next card until the answer has finished being spoken;
+    # a heard command still barges in and cuts it short.
+    read_answer: str = "incorrect"
 
     # --- Session ---
     terminator: str = field(default_factory=lambda: _env_str("AVR_TERMINATOR", "done"))
@@ -208,6 +213,14 @@ class Config:
     @property
     def manual(self) -> bool:
         return self.grading_mode == "manual"
+
+    def reads_answer(self, correct: bool) -> bool:
+        """Whether the answer is read aloud in auto mode for a verdict of `correct`."""
+        if self.read_answer == "always":
+            return True
+        if self.read_answer == "incorrect":
+            return not correct
+        return False
 
     @classmethod
     def from_mapping(cls, data: dict) -> "Config":
@@ -240,6 +253,7 @@ class Config:
             vad_threshold=float(data.get("vad_threshold") or 0.45),
             ollama_keep_alive=str(data.get("ollama_keep_alive") or "30m"),
             announce_verdict=bool(data.get("announce_verdict", True)),
+            read_answer=str(pick("read_answer", defaults.read_answer)).lower(),
             flag_on_skip=int(data.get("flag_on_skip") or 0),
             command_words=_merge_command_words(data.get("command_words")),
         )
@@ -263,4 +277,8 @@ class Config:
                 problems.append(f"the {action!r} command needs at least one word")
         if self.grading_mode not in ("auto", "manual"):
             problems.append(f"grading mode must be 'auto' or 'manual', got {self.grading_mode!r}")
+        if self.read_answer not in ("never", "incorrect", "always"):
+            problems.append(
+                f"read answer must be 'never', 'incorrect', or 'always', got {self.read_answer!r}"
+            )
         return problems

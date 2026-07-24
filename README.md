@@ -129,6 +129,7 @@ say **undo** and grade it yourself, or switch **Grading** to Manual so you grade
 |---|---|---|
 | End-of-answer word | `done` | the word that finishes your answer |
 | Grading | Automatic | **Automatic** judges your answer with the model. **Manual** reads the answer back and waits for you to say good or again — no model, no time limit |
+| Read answer aloud | Only when wrong | Auto mode only. Read the answer back only on a wrong answer, **Always**, or **Never** (shown on screen, not spoken). Reading holds the advance until it finishes; a spoken command cuts it short |
 | Pause after grading | 0 s | 0 goes straight to the next card; say **undo** to take back a grade. Raise it to pause and wait instead |
 | Flag on skip | off | also flag the card when you skip or bury it, so you can find it later with `flag:1` in the browser |
 | Whisper model | `~/whisper-models/ggml-base.en.bin` | swap in `small.en` for accuracy over speed |
@@ -191,7 +192,8 @@ in order:
 | Change | Effect |
 |---|---|
 | `whisper_threads` (default 8) | Biggest single win. The whisper default of 4 leaves most of an M-series chip idle. |
-| `announce_verdict: false` | Saves about a second per card. The verdict is on screen, and a wrong answer is still read back. |
+| `announce_verdict: false` | Saves about a second per card. The verdict is on screen either way. |
+| `read_answer: never` | Skips reading the answer aloud entirely — it is still shown on screen. `incorrect` (default) reads it only when you were wrong; `always` reads every card. Reading holds the advance until it finishes. |
 | `whisper_length_ms` (default 5000) | Less trailing audio transcribed per utterance. Lower is faster; too low clips long answers. |
 | `say_rate` (default 190) | Everything spoken gets shorter. 220-250 is still comfortable once used to it. |
 | `ollama_keep_alive` (default 30m) | Keeps the judge loaded. Without it a card after an idle spell pays seconds to reload the model. |

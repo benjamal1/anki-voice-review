@@ -137,9 +137,10 @@ class TestVerdictAnnouncement:
         assert "Correct" in [i.text for i in of(intents, Speak)]
         assert of(intents, StartOverrideTimer)
 
-    def test_incorrect_announces_verdict_but_does_not_read_the_answer(self):
-        # Auto mode flips the card so the answer is visible; it is no longer read aloud.
-        s = windowed(correct=False)
+    def test_incorrect_announces_verdict_without_reading_when_read_is_off(self):
+        # With reading off, auto mode flips the card so the answer is visible but does not
+        # speak it; the verdict is still announced.
+        s = session(correct=False, override_window_s=2.5, read_answer="never")
         spoken = [i.text for i in of(s.on_line("Berlin done"), Speak)]
         assert "Incorrect" in spoken
         assert "Paris" not in spoken
@@ -280,9 +281,16 @@ class TestBareTerminatorMeansIDontKnow:
         s.on_line("done")
         assert called == [], "there is nothing to grade; the verdict is not a judgement call"
 
-    def test_bare_terminator_flips_but_does_not_read_the_answer(self):
-        # "I don't know" marks wrong and flips the card; the answer is visible, not spoken.
+    def test_bare_terminator_reads_the_answer_by_default(self):
+        # "I don't know" is a wrong verdict, so under the default (read on incorrect) the answer
+        # is read back — the whole point of getting one wrong.
         s = session()
+        intents = s.on_line("done")
+        assert of(intents, ShowAnswer)
+        assert CARD.answer in [i.text for i in of(intents, Speak)]
+
+    def test_bare_terminator_only_flips_when_reading_is_off(self):
+        s = session(read_answer="never")
         intents = s.on_line("done")
         assert of(intents, ShowAnswer)
         assert CARD.answer not in [i.text for i in of(intents, Speak)]
@@ -503,14 +511,16 @@ class TestImmediateAdvance:
         assert s.phase is Phase.LISTENING
 
     def test_an_incorrect_answer_also_advances_immediately(self):
-        s = session(correct=False)
+        # Immediate advance is the no-read case; with reading on, a wrong answer is held while
+        # the answer is spoken (covered in TestAutoModeReadsAnswer).
+        s = session(correct=False, read_answer="never")
         intents = s.on_line("Berlin done")
         assert of(intents, AnswerCard)[0].ease == EASE_AGAIN
         assert of(intents, NextCard)
 
     def test_the_card_flips_but_the_answer_is_not_read_when_wrong(self):
-        # Auto mode shows the answer (flip) instead of speaking it.
-        s = session(correct=False)
+        # With reading off, auto mode shows the answer (flip) instead of speaking it.
+        s = session(correct=False, read_answer="never")
         intents = s.on_line("Berlin done")
         assert of(intents, ShowAnswer)
         assert CARD.answer not in [i.text for i in of(intents, Speak)]
@@ -797,20 +807,61 @@ class TestAccumulatedContext:
         assert s.graded == 1
 
 
-class TestAutoModeDoesNotReadTheAnswer:
-    def test_correct_does_not_read_the_answer(self):
-        s = session(correct=True)
-        spoken = [i.text for i in of(s.on_line("Paris done"), Speak)]
-        assert CARD.answer not in spoken
+class TestAutoModeReadsAnswer:
+    """`read_answer` controls whether auto mode speaks the answer after grading, and reading it
+    holds the advance (via the override phase) so the card is not submitted mid-read."""
 
-    def test_incorrect_does_not_read_the_answer_either(self):
-        # Changed: auto mode flips the card (ShowAnswer) but no longer speaks the answer.
-        s = session(correct=False)
+    def spoken(self, intents):
+        return [i.text for i in of(intents, Speak)]
+
+    # --- default: read only when wrong ---
+
+    def test_default_reads_the_answer_when_wrong(self):
+        s = session(correct=False)  # default read_answer="incorrect"
         intents = s.on_line("Berlin done")
-        assert of(intents, ShowAnswer), "the card must still flip so the answer is visible"
-        assert CARD.answer not in [i.text for i in of(intents, Speak)]
+        assert of(intents, ShowAnswer)
+        assert CARD.answer in self.spoken(intents)
+        # Held, not advanced: no AnswerCard/NextCard until the read finishes.
+        assert not of(intents, AnswerCard) and not of(intents, NextCard)
+        assert of(intents, StartOverrideTimer)
+        assert s.phase is Phase.OVERRIDE
 
-    def test_it_still_flips_and_advances(self):
+    def test_default_does_not_read_the_answer_when_correct(self):
         s = session(correct=True)
         intents = s.on_line("Paris done")
+        assert CARD.answer not in self.spoken(intents)
+        # Nothing to wait for, so it advances immediately.
         assert of(intents, ShowAnswer) and of(intents, AnswerCard) and of(intents, NextCard)
+
+    def test_the_held_card_advances_when_the_read_finishes(self):
+        s = session(correct=False)
+        s.on_line("Berlin done")
+        intents = s.on_override_expired()
+        assert of(intents, AnswerCard)[0].ease == EASE_AGAIN and of(intents, NextCard)
+
+    # --- never ---
+
+    def test_never_reads_neither_right_nor_wrong(self):
+        for correct in (True, False):
+            s = session(correct=correct, read_answer="never")
+            intents = s.on_line(("Paris" if correct else "Berlin") + " done")
+            assert CARD.answer not in self.spoken(intents)
+            # No read and no pause: straight through.
+            assert of(intents, AnswerCard) and of(intents, NextCard)
+
+    # --- always ---
+
+    def test_always_reads_on_both_verdicts(self):
+        for correct in (True, False):
+            s = session(correct=correct, read_answer="always")
+            intents = s.on_line(("Paris" if correct else "Berlin") + " done")
+            assert CARD.answer in self.spoken(intents)
+            assert of(intents, StartOverrideTimer) and not of(intents, AnswerCard)
+
+    # --- a spoken command still barges in over the held read ---
+
+    def test_a_spoken_ease_overrides_the_held_read(self):
+        s = session(correct=False)  # reads on wrong, so it is holding
+        s.on_line("Berlin done")
+        intents = s.on_line("good")
+        assert of(intents, AnswerCard)[0].ease == EASE_GOOD and of(intents, NextCard)

@@ -302,7 +302,13 @@ class VoiceWorker(threading.Thread):
                     )
                     break
 
-                if self._override_deadline and time.monotonic() >= self._override_deadline:
+                if (
+                    self._override_deadline
+                    and time.monotonic() >= self._override_deadline
+                    and not self.tts.is_busy
+                ):
+                    # Deadline reached, but not while the answer is still being read — a pause of
+                    # 0 with answer-reading on means "advance the instant the read finishes".
                     self._override_deadline = None
                     self._execute(self.session.on_override_expired())
         except Exception as exc:  # noqa: BLE001 - a crashed worker must not take Anki with it

@@ -177,6 +177,18 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Grading", self.grading_mode)
 
+        self.read_answer = QComboBox()
+        self.read_answer.addItem("Only when I got it wrong", "incorrect")
+        self.read_answer.addItem("Always", "always")
+        self.read_answer.addItem("Never — just show it on screen", "never")
+        wanted_read = str(config.get("read_answer") or "incorrect").lower()
+        self.read_answer.setCurrentIndex(max(0, self.read_answer.findData(wanted_read)))
+        self.read_answer.setToolTip(
+            "Whether auto mode reads the answer aloud after grading. Reading holds the advance\n"
+            "to the next card until it has finished; saying a command cuts it short."
+        )
+        form.addRow("Read answer aloud", self.read_answer)
+
         self.flag_on_skip = QComboBox()
         self.flag_on_skip.addItem("Don't flag", 0)
         for name, value in FLAG_BY_NAME.items():
@@ -207,7 +219,7 @@ class SettingsDialog(QDialog):
 
         def sync_mode() -> None:
             automatic = self.grading_mode.currentData() == "auto"
-            for widget in (self.override, self.ollama_model):
+            for widget in (self.override, self.ollama_model, self.read_answer):
                 widget.setEnabled(automatic)
 
         self.grading_mode.currentIndexChanged.connect(lambda _: sync_mode())
@@ -256,6 +268,7 @@ class SettingsDialog(QDialog):
         self.terminator.setText(defaults.terminator)
         self.override.setValue(defaults.override_window_s)
         self.grading_mode.setCurrentIndex(0)
+        self.read_answer.setCurrentIndex(max(0, self.read_answer.findData(defaults.read_answer)))
         self.flag_on_skip.setCurrentIndex(0)
         self.model_path.setText(str(defaults.whisper_model))
         self.ollama_model.setText(defaults.ollama_model)
@@ -270,6 +283,7 @@ class SettingsDialog(QDialog):
                 "terminator": self.terminator.text().strip() or "done",
                 "override_window_seconds": self.override.value(),
                 "grading_mode": self.grading_mode.currentData(),
+                "read_answer": self.read_answer.currentData(),
                 "flag_on_skip": self.flag_on_skip.currentData(),
                 "whisper_model": self.model_path.text().strip(),
                 "ollama_model": self.ollama_model.text().strip(),

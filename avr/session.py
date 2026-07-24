@@ -479,22 +479,28 @@ class Session:
 
         self.pending_ease = EASE_GOOD if verdict.correct else EASE_AGAIN
 
-        # Flip the card so the answer is visible on screen; do not read it aloud. Auto mode is
-        # the fast path — you can see the answer, and reading it back adds a second per card.
+        # Flip the card so the answer is visible on screen.
         intents: list[Intent] = [ShowAnswer()]
         if self.cfg.announce_verdict:
             intents.append(Speak("Correct" if verdict.correct else "Incorrect"))
 
-        if self.cfg.override_window_s <= 0:
-            # Straight on to the next card. Making every card wait out a window that is
-            # usually unused costs more than the rare disagreement, which "undo" fixes after
-            # the fact.
+        read = self.cfg.reads_answer(verdict.correct)
+        if read:
+            intents.append(Speak(self.card.answer))
+
+        if not read and self.cfg.override_window_s <= 0:
+            # Nothing to wait for: no answer being read and no configured pause. Straight on to
+            # the next card. Making every card wait out an unused window costs more than the
+            # rare disagreement, which "undo" fixes after the fact.
             self.phase = Phase.LISTENING
             self.previous_card = self.card
             intents.append(AnswerCard(self.pending_ease))
             intents.append(NextCard())
             return intents
 
+        # Hold the advance. The override timer counts the configured pause, but the runner also
+        # holds while the answer is still being spoken — so the card is not submitted out from
+        # under a read in progress. A heard command barges in and cuts it short either way.
         self.phase = Phase.OVERRIDE
         intents.append(StartOverrideTimer(self.cfg.override_window_s))
         return intents

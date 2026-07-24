@@ -190,6 +190,30 @@ class TestMathNotation:
 
 
 
+class TestReadAnswer:
+    def test_default_reads_only_when_incorrect(self):
+        cfg = Config()
+        assert cfg.read_answer == "incorrect"
+        assert cfg.reads_answer(correct=False) is True
+        assert cfg.reads_answer(correct=True) is False
+
+    def test_always_reads_on_both(self):
+        cfg = Config(read_answer="always")
+        assert cfg.reads_answer(True) and cfg.reads_answer(False)
+
+    def test_never_reads_on_neither(self):
+        cfg = Config(read_answer="never")
+        assert not cfg.reads_answer(True) and not cfg.reads_answer(False)
+
+    def test_from_mapping_lowercases_and_defaults(self):
+        assert Config.from_mapping({"read_answer": "Always"}).read_answer == "always"
+        assert Config.from_mapping({}).read_answer == "incorrect"
+
+    def test_validate_rejects_a_bad_value(self):
+        assert Config(read_answer="sometimes").validate()
+        assert not Config(read_answer="never").validate()
+
+
 class TestConfigMigration:
     """Anki keeps a user's add-on config across updates, so a new default never reaches anyone
     who has opened the settings dialog — their stored copy of the OLD default wins silently."""
