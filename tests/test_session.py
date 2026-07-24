@@ -137,12 +137,12 @@ class TestVerdictAnnouncement:
         assert "Correct" in [i.text for i in of(intents, Speak)]
         assert of(intents, StartOverrideTimer)
 
-    def test_incorrect_also_speaks_the_right_answer(self):
-        # Hearing the answer is the point of getting one wrong.
-        s = session(correct=False)
+    def test_incorrect_announces_verdict_but_does_not_read_the_answer(self):
+        # Auto mode flips the card so the answer is visible; it is no longer read aloud.
+        s = windowed(correct=False)
         spoken = [i.text for i in of(s.on_line("Berlin done"), Speak)]
         assert "Incorrect" in spoken
-        assert "Paris" in spoken
+        assert "Paris" not in spoken
 
     def test_correct_does_not_read_the_answer_back(self):
         s = session(correct=True)
@@ -280,12 +280,12 @@ class TestBareTerminatorMeansIDontKnow:
         s.on_line("done")
         assert called == [], "there is nothing to grade; the verdict is not a judgement call"
 
-    def test_the_answer_is_still_read_back(self):
-        # Hearing the answer is the entire point of not knowing it.
+    def test_bare_terminator_flips_but_does_not_read_the_answer(self):
+        # "I don't know" marks wrong and flips the card; the answer is visible, not spoken.
         s = session()
-        spoken = [i.text for i in of(s.on_line("done"), Speak)]
-        assert "Incorrect" in spoken
-        assert CARD.answer in spoken
+        intents = s.on_line("done")
+        assert of(intents, ShowAnswer)
+        assert CARD.answer not in [i.text for i in of(intents, Speak)]
 
     def test_it_defaults_to_again_and_can_still_be_overridden(self):
         s = windowed()
@@ -508,9 +508,12 @@ class TestImmediateAdvance:
         assert of(intents, AnswerCard)[0].ease == EASE_AGAIN
         assert of(intents, NextCard)
 
-    def test_the_answer_is_still_read_back_when_wrong(self):
+    def test_the_card_flips_but_the_answer_is_not_read_when_wrong(self):
+        # Auto mode shows the answer (flip) instead of speaking it.
         s = session(correct=False)
-        assert CARD.answer in [i.text for i in of(s.on_line("Berlin done"), Speak)]
+        intents = s.on_line("Berlin done")
+        assert of(intents, ShowAnswer)
+        assert CARD.answer not in [i.text for i in of(intents, Speak)]
 
     def test_a_window_can_still_be_configured(self):
         s = windowed(correct=True, seconds=2.0)
@@ -746,3 +749,68 @@ class TestAutoModeUnaffectedByTrailingEase:
         s.begin_card(CARD)
         s.on_line("cholesterol can be good done")
         assert "good" in seen.get("t", ""), "the whole answer, including 'good', must be graded"
+
+
+class TestAccumulatedContext:
+    """All speech on a card's front is bundled into one clean transcript, deduped against
+    whisper's overlapping/repeated lines, and graded as a whole."""
+
+    def graded_transcript(self, lines):
+        seen = {}
+
+        def spy(q, a, t, cfg):
+            seen["t"] = t
+            return Verdict(True, 1.0, "stub")
+
+        s = Session(cfg=Config(), grade_fn=spy)
+        s.begin_card(CARD)
+        for ln in lines:
+            s.on_line(ln)
+        return seen.get("t", "")
+
+    def test_multiple_utterances_are_bundled(self):
+        t = self.graded_transcript(["the mitochondrion", "is the powerhouse", "done"])
+        assert "mitochondrion" in t and "powerhouse" in t
+
+    def test_an_exact_repeat_is_not_duplicated(self):
+        t = self.graded_transcript(["Paris", "Paris", "done"])
+        assert t.lower().split().count("paris") == 1
+
+    def test_a_whisper_extension_replaces_not_appends(self):
+        # whisper emits "the answer" then "the answer is Paris" — should not become
+        # "the answer the answer is Paris".
+        t = self.graded_transcript(["the answer", "the answer is Paris", "done"])
+        assert t.lower().count("the answer") == 1
+        assert "paris" in t.lower()
+
+    def test_buffer_resets_on_a_new_card(self):
+        t = self.graded_transcript(["Paris", "done"])
+        assert "berlin" not in t.lower()
+
+    def test_the_terminator_is_the_last_word_trigger(self):
+        # Deterministic: the answer is graded only when the last word is the terminator.
+        s = Session(cfg=Config(), grade_fn=always(True))
+        s.begin_card(CARD)
+        assert s.on_line("the capital of France") == []  # no trigger yet
+        assert s.graded == 0
+        s.on_line("is Paris done")
+        assert s.graded == 1
+
+
+class TestAutoModeDoesNotReadTheAnswer:
+    def test_correct_does_not_read_the_answer(self):
+        s = session(correct=True)
+        spoken = [i.text for i in of(s.on_line("Paris done"), Speak)]
+        assert CARD.answer not in spoken
+
+    def test_incorrect_does_not_read_the_answer_either(self):
+        # Changed: auto mode flips the card (ShowAnswer) but no longer speaks the answer.
+        s = session(correct=False)
+        intents = s.on_line("Berlin done")
+        assert of(intents, ShowAnswer), "the card must still flip so the answer is visible"
+        assert CARD.answer not in [i.text for i in of(intents, Speak)]
+
+    def test_it_still_flips_and_advances(self):
+        s = session(correct=True)
+        intents = s.on_line("Paris done")
+        assert of(intents, ShowAnswer) and of(intents, AnswerCard) and of(intents, NextCard)

@@ -263,11 +263,33 @@ class Session:
                 return self._grade_now(EASE_BY_NAME[ease])
 
         speech, terminated = split_terminator(line, self.cfg.terminator)
-        if speech:
-            self.buffer.append(speech)
+        self._accumulate(speech)
         if terminated:
             return self._grade()
         return []
+
+    def _accumulate(self, speech: str) -> None:
+        """Add a heard fragment to the running answer, without duplicating.
+
+        Everything said on the front of a card is bundled into one transcript, reset only when
+        the card state changes (a new card, or the flip to the back). whisper sometimes repeats
+        or extends its previous line rather than emitting a clean new utterance; appending those
+        blindly gives the grader a garbled "the answer the answer is X" to judge. Collapsing an
+        exact repeat or a prefix-extension keeps the bundled context clean.
+        """
+        speech = speech.strip()
+        if not speech:
+            return
+        if self.buffer:
+            prev_n, new_n = normalize(self.buffer[-1]), normalize(speech)
+            if new_n == prev_n or new_n in ("", prev_n):
+                return  # exact repeat
+            if new_n.startswith(prev_n):
+                self.buffer[-1] = speech  # whisper extended its previous line; replace
+                return
+            if prev_n.startswith(new_n):
+                return  # a shorter repeat of what we already have
+        self.buffer.append(speech)
 
     def _on_line_awaiting_ease(self, line: str) -> list[Intent]:
         """Manual grading: nothing is decided until the user says so.
@@ -457,12 +479,11 @@ class Session:
 
         self.pending_ease = EASE_GOOD if verdict.correct else EASE_AGAIN
 
+        # Flip the card so the answer is visible on screen; do not read it aloud. Auto mode is
+        # the fast path — you can see the answer, and reading it back adds a second per card.
         intents: list[Intent] = [ShowAnswer()]
         if self.cfg.announce_verdict:
             intents.append(Speak("Correct" if verdict.correct else "Incorrect"))
-        if not verdict.correct:
-            # Hearing the right answer is the entire point of getting one wrong.
-            intents.append(Speak(self.card.answer))
 
         if self.cfg.override_window_s <= 0:
             # Straight on to the next card. Making every card wait out a window that is
