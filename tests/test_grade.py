@@ -7,7 +7,7 @@ import urllib.error
 import pytest
 
 from avr import grade as grade_mod
-from avr.config import Config
+from avr.config import Config, migrate_config
 from avr.grade import SHORT_ANSWER_CORRECT, correct_threshold, fuzzy_score, grade
 
 
@@ -242,3 +242,62 @@ class TestShortAnswerStrictness:
         calls = stub_judge(monkeypatch, False)
         verdict = grade("q", "Paris", "The capital of France is Paris.", cfg)
         assert verdict.correct and calls == []
+
+
+class TestConfigMigration:
+    """Anki keeps a user's add-on config across updates, so a new default never reaches anyone
+    who has opened the settings dialog — their stored copy of the OLD default wins silently."""
+
+    def stale(self):
+        # Captured verbatim from a real installation running the current build.
+        return {
+            "terminator": "done",
+            "override_window_seconds": 2.5,
+            "headphones": False,
+            "grading_mode": "auto",
+            "flag_on_skip": 1,
+            "fuzzy_correct": 0.75,
+            "fuzzy_wrong": 0.4,
+            "say_rate": "250",
+            "use_llm_judge": True,
+        }
+
+    def test_old_defaults_are_brought_forward(self):
+        migrated, changes = migrate_config(self.stale())
+        assert migrated["override_window_seconds"] == 0.0
+        assert migrated["fuzzy_correct"] == 0.62
+        assert migrated["fuzzy_wrong"] == 0.3
+        assert changes
+
+    def test_settings_the_user_actually_chose_are_left_alone(self):
+        migrated, _ = migrate_config(self.stale())
+        assert migrated["say_rate"] == "250", "a deliberate choice must survive"
+        assert migrated["flag_on_skip"] == 1
+
+    def test_a_deliberately_different_value_is_not_reset(self):
+        stale = self.stale()
+        stale["override_window_seconds"] = 4.0  # not the old default, so it was chosen
+        migrated, _ = migrate_config(stale)
+        assert migrated["override_window_seconds"] == 4.0
+
+    def test_dead_keys_are_removed(self):
+        migrated, _ = migrate_config(self.stale())
+        assert "use_llm_judge" not in migrated
+
+    def test_turning_the_llm_off_becomes_manual_grading(self):
+        stale = self.stale()
+        stale["use_llm_judge"] = False
+        del stale["grading_mode"]
+        migrated, _ = migrate_config(stale)
+        assert migrated["grading_mode"] == "manual"
+
+    def test_migrating_twice_changes_nothing_the_second_time(self):
+        once, _ = migrate_config(self.stale())
+        twice, changes = migrate_config(once)
+        assert changes == [] and twice == once
+
+    def test_the_migrated_config_produces_the_new_defaults(self):
+        migrated, _ = migrate_config(self.stale())
+        cfg = Config.from_mapping(migrated)
+        assert cfg.override_window_s == 0.0
+        assert cfg.fuzzy_correct == 0.62

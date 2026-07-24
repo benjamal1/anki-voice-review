@@ -67,6 +67,56 @@ def _env_float(name: str, default: float) -> float:
         raise SystemExit(f"{name} must be a number, got {raw!r}")
 
 
+# Anki keeps a user's add-on config across updates. That is right for settings they chose, but
+# it means a NEW default never reaches anyone who has ever opened the settings dialog — their
+# stored copy of the OLD default silently wins. Renaming a setting is worse: the old key sits
+# there doing nothing while the feature looks broken.
+#
+# Migration is possible because a stored value equal to the old default was, by definition,
+# never deliberately chosen. Values that differ are the user's and are left alone.
+CONFIG_VERSION = 2
+
+_DEFAULT_MIGRATIONS = {
+    # key: (old default, new default)
+    "override_window_seconds": (2.5, 0.0),
+    "fuzzy_correct": (0.75, 0.62),
+    "fuzzy_wrong": (0.4, 0.3),
+    "vad_threshold": (0.6, 0.45),
+    "whisper_length_ms": (8000, 5000),
+}
+
+_DEAD_KEYS = ("use_llm_judge",)
+
+
+def migrate_config(stored: dict) -> tuple:
+    """Bring an older stored config forward. Returns (config, list of changes made)."""
+    config = dict(stored or {})
+    changes = []
+
+    if config.get("config_version") == CONFIG_VERSION:
+        return config, changes
+
+    # "Use the local LLM" became a grading mode. Someone who turned the model off wanted to
+    # grade their own answers, which is what manual mode is.
+    if "use_llm_judge" in config and not config.get("grading_mode"):
+        if config["use_llm_judge"] is False:
+            config["grading_mode"] = "manual"
+            changes.append("LLM off -> manual grading")
+
+    for key in _DEAD_KEYS:
+        if key in config:
+            del config[key]
+            changes.append(f"removed {key}")
+
+    for key, (old_default, new_default) in _DEFAULT_MIGRATIONS.items():
+        if key in config and config[key] == old_default:
+            config[key] = new_default
+            changes.append(f"{key}: {old_default} -> {new_default}")
+
+    config["config_version"] = CONFIG_VERSION
+    return config, changes
+
+
 def _merge_command_words(supplied) -> dict:
     """User-supplied words override the defaults per action; unlisted actions keep theirs."""
     words = {action: list(spoken) for action, spoken in DEFAULT_COMMAND_WORDS.items()}

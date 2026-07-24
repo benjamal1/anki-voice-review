@@ -29,7 +29,28 @@ def open_voice_review() -> None:
     _dialog._refresh_ready_state()
 
 
+def _migrate_config() -> None:
+    """Bring a config saved against an older version of this add-on up to date.
+
+    Without this, settings you never chose — the previous version's defaults — keep overriding
+    the current ones, and a renamed setting leaves the feature it controls apparently broken.
+    """
+    try:
+        from .avr.config import migrate_config
+
+        package = __name__.split(".")[0]
+        stored = mw.addonManager.getConfig(package) or {}
+        migrated, changes = migrate_config(stored)
+        if changes:
+            mw.addonManager.writeConfig(package, migrated)
+            print(f"[Voice Review] migrated settings: {'; '.join(changes)}")
+    except Exception as exc:  # noqa: BLE001 - never block the add-on from loading
+        print(f"[Voice Review] settings migration skipped: {exc}")
+
+
 def _install_menu() -> None:
+    _migrate_config()
+
     action = QAction("Voice Review", mw)
     action.setShortcut(QKeySequence("Ctrl+Shift+V"))
     qconnect(action.triggered, open_voice_review)

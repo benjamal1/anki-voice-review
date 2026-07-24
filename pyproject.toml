@@ -11,7 +11,10 @@ dependencies = []
 avr = "avr.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pyqt6>=6.11.0",
+    "pytest>=8",
+]
 
 [build-system]
 requires = ["hatchling"]
