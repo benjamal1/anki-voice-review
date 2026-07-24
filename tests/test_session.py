@@ -247,3 +247,48 @@ class TestConfigurableTerminator:
         assert s.on_line("done") == [] or s.graded == 0
         s.on_line("Paris finished")
         assert s.graded == 1
+
+
+class TestBareTerminatorMeansIDontKnow:
+    """Saying just the end word, with nothing before it, is a deliberate 'I don't know' — the
+    fastest hands-free way to mark a card wrong. It must grade, not prompt again."""
+
+    def test_bare_terminator_grades_incorrect(self):
+        s = session(correct=True)  # grader would say correct; it must not be consulted
+        s.on_line("done")
+        assert s.graded == 1
+        assert s.last_verdict is not None and not s.last_verdict.correct
+
+    def test_it_does_not_call_the_grader(self):
+        called = []
+
+        def spy(q, a, t, cfg):
+            called.append(t)
+            return Verdict(True, 1.0, "stub")
+
+        s = Session(cfg=Config(), grade_fn=spy)
+        s.begin_card(CARD)
+        s.on_line("done")
+        assert called == [], "there is nothing to grade; the verdict is not a judgement call"
+
+    def test_the_answer_is_still_read_back(self):
+        # Hearing the answer is the entire point of not knowing it.
+        s = session()
+        spoken = [i.text for i in of(s.on_line("done"), Speak)]
+        assert "Incorrect" in spoken
+        assert CARD.answer in spoken
+
+    def test_it_defaults_to_again_and_can_still_be_overridden(self):
+        s = session()
+        s.on_line("done")
+        assert of(s.on_override_expired(), AnswerCard)[0].ease == EASE_AGAIN
+
+    def test_override_still_wins_after_a_bare_terminator(self):
+        s = session()
+        s.on_line("done")
+        assert of(s.on_line("good"), AnswerCard)[0].ease == EASE_GOOD
+
+    def test_the_verdict_is_labelled_so_it_is_distinguishable(self):
+        s = session()
+        s.on_line("done")
+        assert s.last_verdict.source == "no answer"

@@ -101,6 +101,7 @@ the grade by voice before it is submitted.
 | Say | What happens |
 |---|---|
 | your answer, then **done** | grade it |
+| just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |
 | **again** / **hard** / **good** / **easy** | set the grade yourself — during the override window, or instead of answering |
 | **repeat** | read the card again, discard what you had said |
 | **skip** | bury the card and move on, no grade |

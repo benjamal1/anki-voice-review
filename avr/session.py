@@ -207,13 +207,17 @@ class Session:
         transcript = " ".join(self.buffer).strip()
 
         if not transcript:
-            # Grading silence always yields 0.0, i.e. "incorrect". If the microphone is not
-            # working, or the echo gate swallowed the answer, every card would be marked wrong
-            # with no clue why. Say so and keep listening instead of scheduling a lapse.
-            self.phase = Phase.LISTENING
-            return [Speak("I did not catch that. Try again.")]
-
-        verdict = self.grade_fn(self.card.question, self.card.answer, transcript, self.cfg)
+            # The terminator on its own means "I don't know" — the fastest way to mark a card
+            # wrong without touching anything. Made explicit rather than falling out of
+            # scoring silence at 0.0, so the intent is visible and the answer still gets read
+            # back, which is the point of getting one wrong.
+            #
+            # This cannot be confused with a dead microphone: grading only runs when the
+            # terminator is *heard*, so if nothing were being transcribed there would be no
+            # terminator and no grading at all.
+            verdict = Verdict(False, 0.0, "no answer", "nothing said before the end word")
+        else:
+            verdict = self.grade_fn(self.card.question, self.card.answer, transcript, self.cfg)
         self.last_transcript = transcript
         self.last_verdict = verdict
         self.graded += 1

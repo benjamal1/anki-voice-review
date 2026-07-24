@@ -91,6 +91,15 @@ CASES = [
         note="graded correct, but the spoken override must win",
     ),
     Case(
+        label="bare end word means I don't know",
+        note_type="Basic",
+        fields={"Front": "What is the atomic number of tungsten?", "Back": "74"},
+        script=["done"],
+        expect_correct=False,
+        expect_ease=EASE_AGAIN,
+        note="saying just the end word is the fastest hands-free way to mark a card wrong",
+    ),
+    Case(
         label="skip advances without grading",
         note_type="Basic",
         fields={"Front": "Skip me", "Back": "nothing"},
