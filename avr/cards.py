@@ -194,6 +194,60 @@ LATEX_SPEECH = {
 }
 
 
+# Spoken numbers versus written ones. A card says "4"; the transcript says "four". Without
+# folding these together a correct answer scores near zero — the failure looks like bad speech
+# recognition when it is really just two spellings of the same number.
+_UNITS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19,
+}
+_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90,
+}
+_SCALES = {"hundred": 100, "thousand": 1000, "million": 1_000_000}
+_NUMBER_WORDS = set(_UNITS) | set(_TENS) | set(_SCALES)
+
+
+def words_to_numbers(text: str) -> str:
+    """Rewrite spoken numbers as digits: "twenty three" -> "23", "four" -> "4".
+
+    Folds multi-word numbers so "twenty three" matches "23" rather than "20 3". Only runs of
+    number words are touched; everything else passes through untouched.
+    """
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        total = 0
+        current = 0
+        for word in run:
+            if word in _UNITS:
+                current += _UNITS[word]
+            elif word in _TENS:
+                current += _TENS[word]
+            elif word == "hundred":
+                current = (current or 1) * 100
+            else:  # thousand, million
+                total += (current or 1) * _SCALES[word]
+                current = 0
+        out.append(str(total + current))
+        run.clear()
+
+    for token in text.split():
+        if token in _NUMBER_WORDS:
+            run.append(token)
+        else:
+            flush()
+            out.append(token)
+    flush()
+    return " ".join(out)
+
+
 def expand_math(text: str) -> str:
     """Rewrite mathematical notation the way a person would read it aloud."""
     for command, spoken in LATEX_SPEECH.items():
@@ -216,7 +270,9 @@ def normalize(text: str) -> str:
     # Before punctuation is stripped, or "^" and "=" vanish and take their meaning with them.
     text = expand_math(text)
     text = re.sub(r"[^\w\s]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    # After punctuation is gone, so "twenty-three" has already become "twenty three".
+    return words_to_numbers(text)
 
 
 def speakable(text: str) -> str:

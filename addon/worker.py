@@ -18,6 +18,7 @@ from .avr.session import (
     AnswerCard,
     BuryCard,
     FlagCard,
+    UndoCard,
     NextCard,
     Quit,
     Session,
@@ -69,9 +70,13 @@ class VoiceWorker(threading.Thread):
         self.stt = Transcriber(cfg.whisper_bin, cfg.whisper_model)
         self.tts = Speaker(cfg.say_voice, cfg.say_rate, cfg.echo_tail_s)
 
-        self._stop = threading.Event()
+        # NOT self._stop: threading.Thread already defines a private _stop() method, and
+        # overwriting it makes is_alive() raise "'Event' object is not callable" the moment
+        # anything checks whether the thread is running.
+        self._stopping = threading.Event()
         self._override_deadline: Optional[float] = None
         self._last_card_id = 0
+        self._pending_line: Optional[str] = None
 
     def request_stop(self) -> None:
         """Stop now, not at the end of the current sentence.
@@ -81,7 +86,7 @@ class VoiceWorker(threading.Thread):
         code that releases the microphone — so a restart would find whisper still holding it
         and the new process would exit immediately.
         """
-        self._stop.set()
+        self._stopping.set()
         self.tts.interrupt()
 
     def shutdown(self, timeout: float = 5.0) -> bool:
@@ -97,14 +102,21 @@ class VoiceWorker(threading.Thread):
 
     def _execute(self, intents: list) -> None:
         pending = list(intents)
-        while pending and not self._stop.is_set():
+        while pending and not self._stopping.is_set():
             intent = pending.pop(0)
 
             if isinstance(intent, Speak):
                 self.on_phase(PHASE_SPEAKING, intent.text)
-                # Blocking, then draining: the mic is open the whole time, so this is what
-                # stops whisper transcribing Anki's own voice back as the user's answer.
-                self.tts.speak(intent.text, gate=self.stt)
+                if self.cfg.headphones:
+                    interrupted = self._speak_interruptibly(intent.text)
+                    if interrupted:
+                        # The user talked over it. Their words are already queued, so stop
+                        # running the rest of this batch and let the loop handle them.
+                        return
+                else:
+                    # Blocking, then draining: on speakers the mic hears the TTS, so this is
+                    # what stops whisper transcribing Anki's own voice as the user's answer.
+                    self.tts.speak(intent.text, gate=self.stt)
                 if self.session.phase.name == "LISTENING":
                     self.on_phase(PHASE_LISTENING, "")
 
@@ -116,6 +128,13 @@ class VoiceWorker(threading.Thread):
 
             elif isinstance(intent, StartOverrideTimer):
                 self._override_deadline = time.monotonic() + intent.seconds
+
+            elif isinstance(intent, UndoCard):
+                if self.bridge.undo():
+                    self._override_deadline = None
+                    pending.extend(self._present_current())
+                else:
+                    self.on_error("Anki had nothing to undo.")
 
             elif isinstance(intent, FlagCard):
                 if not self.bridge.set_flag(intent.flag):
@@ -130,25 +149,52 @@ class VoiceWorker(threading.Thread):
                 pending.extend(self._advance())
 
             elif isinstance(intent, Quit):
-                self._stop.set()
+                self._stopping.set()
                 return
+
+    def _speak_interruptibly(self, text: str) -> bool:
+        """Speak while still listening. Returns True if the user talked over it.
+
+        Headphones mode only: nothing being said reaches the microphone, so listening can
+        continue throughout — which is the whole point, since it means you can say "skip" the
+        moment you recognise a card, or start answering as soon as you know it.
+        """
+        self.tts.start(text)
+        while self.tts.is_speaking and not self._stopping.is_set():
+            line = self.stt.get(timeout=0.05)
+            if line:
+                self.tts.interrupt()
+                self.tts.resume()  # the interrupt was for this sentence only
+                self._pending_line = line
+                return True
+        return False
+
+    def _present_current(self) -> list:
+        """Re-read whatever card the reviewer is now showing, without advancing."""
+        try:
+            card = self.bridge.current_card()
+        except BridgeError:
+            return []
+        self._last_card_id = card.card_id
+        self.on_card(card.question)
+        return self.session.begin_card(card)
 
     def _advance(self) -> list:
         # Answering is asynchronous; without waiting for the reviewer to present a fresh
         # question we read back the card just answered and speak it again.
         if not self.bridge.wait_for_question():
             self.tts.speak("Deck finished", gate=self.stt)
-            self._stop.set()
+            self._stopping.set()
             return []
         try:
             card = self.bridge.current_card()
         except NoCardShowing:
             self.tts.speak("Deck finished", gate=self.stt)
-            self._stop.set()
+            self._stopping.set()
             return []
         except BridgeError as exc:
             self.on_error(str(exc))
-            self._stop.set()
+            self._stopping.set()
             return []
 
         repeat = card.card_id == self._last_card_id
@@ -185,8 +231,11 @@ class VoiceWorker(threading.Thread):
             self.on_card(card.question)
             self._execute(self.session.begin_card(card))
 
-            while not self._stop.is_set():
-                line = self.stt.get(timeout=POLL_S)
+            while not self._stopping.is_set():
+                if self._pending_line is not None:
+                    line, self._pending_line = self._pending_line, None
+                else:
+                    line = self.stt.get(timeout=POLL_S)
 
                 if line:
                     self.on_heard(line)

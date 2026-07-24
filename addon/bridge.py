@@ -206,6 +206,27 @@ class AnkiBridge:
 
         return bool(run_on_main(apply))
 
+    def undo(self) -> bool:
+        """Take back the last answer, putting that card back in front of the user.
+
+        This is what lets grading advance immediately instead of pausing on every card for an
+        override window that is usually unused.
+        """
+
+        def revert() -> bool:
+            undo = getattr(mw, "undo", None)
+            if callable(undo):
+                undo()
+                return True
+            legacy = getattr(mw.col, "undo", None)
+            if callable(legacy):
+                legacy()
+                mw.reset()
+                return True
+            return False
+
+        return bool(run_on_main(revert))
+
     def reviewer_state(self) -> Optional[str]:
         """'question', 'answer', or None when not reviewing."""
 

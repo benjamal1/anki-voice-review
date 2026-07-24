@@ -8,6 +8,7 @@ from avr.cards import (
     normalize,
     speakable,
     strip_html,
+    words_to_numbers,
 )
 
 # Shapes below mirror what guiCurrentCard actually returns.
@@ -249,3 +250,40 @@ class TestSpeakable:
         assert "blank" in card.question
         assert "[...]" not in card.question
         assert card.answer == "2^K", "grading must still align on the raw placeholder"
+
+
+class TestSpokenNumbers:
+    """A card writes "4"; the transcript says "four". Without folding these together a correct
+    answer scores near zero, and it looks like bad speech recognition rather than two spellings
+    of the same number."""
+
+    def test_a_single_word_number_becomes_a_digit(self):
+        assert normalize("four") == "4"
+
+    def test_digits_are_left_alone(self):
+        assert normalize("4") == "4"
+
+    def test_a_spoken_number_matches_the_written_one(self):
+        assert normalize("four") == normalize("4")
+
+    def test_compound_numbers_fold_into_one(self):
+        assert words_to_numbers("twenty three") == "23"
+        assert words_to_numbers("one hundred fifty") == "150"
+
+    def test_hyphenated_numbers_work_after_normalising(self):
+        assert normalize("twenty-three") == "23"
+
+    def test_large_numbers(self):
+        assert words_to_numbers("two thousand") == "2000"
+
+    def test_numbers_inside_a_sentence(self):
+        assert words_to_numbers("the answer is four cells") == "the answer is 4 cells"
+
+    def test_ordinary_words_are_untouched(self):
+        assert words_to_numbers("the mitochondrion") == "the mitochondrion"
+
+    def test_a_number_word_answer_grades_against_a_digit_card(self):
+        from avr.grade import fuzzy_score
+
+        assert fuzzy_score("4", "four") == 1.0
+        assert fuzzy_score("256", "two hundred fifty six") == 1.0

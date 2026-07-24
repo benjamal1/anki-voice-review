@@ -15,14 +15,17 @@ from enum import Enum, auto
 from typing import Union
 
 from .cards import Card, normalize
-from .config import EASE_AGAIN, EASE_BY_NAME, EASE_GOOD, FLAG_NAMES, Config
+from .config import (
+    DEFAULT_COMMAND_WORDS,
+    EASE_AGAIN,
+    EASE_BY_NAME,
+    EASE_GOOD,
+    FLAG_NAMES,
+    Config,
+)
 from .grade import Verdict
 
-# "bury" is a synonym for "skip": both set the card aside without grading and without ever
-# revealing the answer, which is what an image card or an unreadable card needs.
-CONTROL_COMMANDS = frozenset({"repeat", "skip", "bury", "quit"})
 EASE_COMMANDS = frozenset(EASE_BY_NAME)
-ALL_COMMANDS = CONTROL_COMMANDS | EASE_COMMANDS
 
 
 class Phase(Enum):
@@ -56,6 +59,11 @@ class NextCard:
 
 
 @dataclass(frozen=True)
+class UndoCard:
+    """Take back the last grade and put that card back in front of you."""
+
+
+@dataclass(frozen=True)
 class FlagCard:
     """Mark the card with one of Anki's coloured flags, so it can be found again later."""
 
@@ -85,19 +93,39 @@ class Quit:
 # typing.Union, not `A | B`: this is a runtime expression, and Anki 25.02.5 bundles Python 3.9
 # where `|` on classes raises TypeError. The add-on imports this module inside Anki.
 Intent = Union[
-    Speak, ShowAnswer, AnswerCard, NextCard, FlagCard, BuryCard, StartOverrideTimer, Quit
+    Speak,
+    ShowAnswer,
+    AnswerCard,
+    NextCard,
+    FlagCard,
+    BuryCard,
+    UndoCard,
+    StartOverrideTimer,
+    Quit,
 ]
 
 
-def match_command(line: str) -> str | None:
-    """Recognise a command **only as a whole utterance**.
+def match_command(line: str, words: dict | None = None, terminator: str = "") -> str | None:
+    """Recognise a command, returning the action name ("skip", "good", ...) or None.
 
-    Substring matching would be a real bug, not a nicety: a card whose answer is
-    "the again reflex" or "good cholesterol" would fire a grade mid-sentence and the user
-    would never find out why their answer was cut off.
+    Matched **only as a whole utterance**. Substring matching would be a real bug, not a
+    nicety: a card whose answer is "the again reflex" or "good cholesterol" would fire a grade
+    mid-sentence and the user would never find out why their answer was cut off.
+
+    A trailing terminator is tolerated — saying "skip done" out of habit should still skip
+    rather than being graded as the answer "skip".
     """
+    words = words or DEFAULT_COMMAND_WORDS
     normalized = normalize(line)
-    return normalized if normalized in ALL_COMMANDS else None
+    if terminator:
+        term = normalize(terminator)
+        if term and normalized.endswith(" " + term):
+            normalized = normalized[: -(len(term) + 1)].strip()
+
+    for action, spoken in words.items():
+        if any(normalized == normalize(word) for word in spoken):
+            return action
+    return None
 
 
 def split_terminator(line: str, terminator: str) -> tuple[str, bool]:
@@ -165,8 +193,11 @@ class Session:
 
     # --- internals ---
 
+    def _command(self, line: str) -> str | None:
+        return match_command(line, self.cfg.command_words, self.cfg.terminator)
+
     def _on_line_listening(self, line: str) -> list[Intent]:
-        command = match_command(line)
+        command = self._command(line)
         if command:
             return self._run_command(command)
 
@@ -183,7 +214,7 @@ class Session:
         No timer and no default. The whole point is that no automatic verdict is being trusted,
         so falling back to one after a few seconds would defeat it.
         """
-        command = match_command(line)
+        command = self._command(line)
         if command in EASE_COMMANDS:
             ease = EASE_BY_NAME[command]
             self.phase = Phase.LISTENING
@@ -194,15 +225,17 @@ class Session:
         if command == "quit":
             self.phase = Phase.FINISHED
             return [Speak("Goodbye"), Quit()]
-        if command in ("skip", "bury"):
+        if command == "skip":
             return self._set_aside()
+        if command == "undo":
+            return self._undo()
         if command == "repeat":
             # Re-read the answer, not the question — the answer is already on screen.
             return [Speak(self.card.answer if self.card else "")]
         return []
 
     def _on_line_override(self, line: str) -> list[Intent]:
-        command = match_command(line)
+        command = self._command(line)
         if command in EASE_COMMANDS:
             self.phase = Phase.LISTENING
             return [AnswerCard(EASE_BY_NAME[command]), NextCard()]
@@ -213,11 +246,14 @@ class Session:
         return []
 
     def _run_command(self, command: str) -> list[Intent]:
+        if command == "undo":
+            return self._undo()
+
         if command == "quit":
             self.phase = Phase.FINISHED
             return [Speak("Goodbye"), Quit()]
 
-        if command in ("skip", "bury"):
+        if command == "skip":
             return self._set_aside()
 
         if command == "repeat":
@@ -234,6 +270,21 @@ class Session:
         if ease >= EASE_GOOD:
             self.correct += 1
         return [ShowAnswer(), AnswerCard(ease), NextCard()]
+
+    def _undo(self) -> list[Intent]:
+        """Take back the last grade.
+
+        This is what makes advancing immediately after grading safe: rather than making every
+        card wait out a window that is usually unused, the rare disagreement is corrected
+        after the fact.
+        """
+        if not self.graded:
+            return [Speak("Nothing to undo")]
+        self.graded -= 1
+        if self.last_verdict is not None and self.last_verdict.correct:
+            self.correct = max(0, self.correct - 1)
+        self.phase = Phase.LISTENING
+        return [Speak("Undone"), UndoCard()]
 
     def _set_aside(self) -> list[Intent]:
         """Skip/bury: put the card away without grading it and without revealing the answer.
@@ -309,11 +360,21 @@ class Session:
             self.correct += 1
 
         self.pending_ease = EASE_GOOD if verdict.correct else EASE_AGAIN
-        self.phase = Phase.OVERRIDE
 
         intents: list[Intent] = [ShowAnswer(), Speak("Correct" if verdict.correct else "Incorrect")]
         if not verdict.correct:
             # Hearing the right answer is the entire point of getting one wrong.
             intents.append(Speak(self.card.answer))
+
+        if self.cfg.override_window_s <= 0:
+            # Straight on to the next card. Making every card wait out a window that is
+            # usually unused costs more than the rare disagreement, which "undo" fixes after
+            # the fact.
+            self.phase = Phase.LISTENING
+            intents.append(AnswerCard(self.pending_ease))
+            intents.append(NextCard())
+            return intents
+
+        self.phase = Phase.OVERRIDE
         intents.append(StartOverrideTimer(self.cfg.override_window_s))
         return intents

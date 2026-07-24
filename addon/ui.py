@@ -155,13 +155,25 @@ class SettingsDialog(QDialog):
         self.terminator.setToolTip("The word that ends your answer and triggers grading.")
         form.addRow("End-of-answer word", self.terminator)
 
+        self.headphones = QCheckBox("Headphones — let me talk over it")
+        self.headphones.setChecked(bool(config.get("headphones", False)))
+        self.headphones.setToolTip(
+            "With headphones nothing the computer says reaches the microphone, so you can\n"
+            "interrupt it: say your answer, or 'skip', the moment you know — no waiting for\n"
+            "the card to finish being read."
+        )
+        form.addRow("", self.headphones)
+
         self.override = QDoubleSpinBox()
         self.override.setRange(0.0, 15.0)
         self.override.setSingleStep(0.5)
         self.override.setSuffix(" s")
         self.override.setValue(float(config.get("override_window_seconds", 2.5)))
-        self.override.setToolTip("How long you get to countermand the grade by voice.")
-        form.addRow("Override window", self.override)
+        self.override.setToolTip(
+            "0 goes straight to the next card after grading. Say 'undo' to take back the last\n"
+            "grade. Set above 0 if you would rather it pause and wait for you each time."
+        )
+        form.addRow("Pause after grading", self.override)
 
         self.grading_mode = QComboBox()
         self.grading_mode.addItem("Automatic — grade my answer for me", "auto")
@@ -261,6 +273,7 @@ class SettingsDialog(QDialog):
                 "override_window_seconds": self.override.value(),
                 "grading_mode": self.grading_mode.currentData(),
                 "flag_on_skip": self.flag_on_skip.currentData(),
+                "headphones": self.headphones.isChecked(),
                 "fuzzy_correct": self.fuzzy_correct.value(),
                 "fuzzy_wrong": self.fuzzy_wrong.value(),
                 "whisper_model": self.model_path.text().strip(),
@@ -342,7 +355,7 @@ class VoiceReviewDialog(QDialog):
         self.commands = QLabel(
             "Say your answer, then the end word. "
             "Commands: <b>again</b> · <b>hard</b> · <b>good</b> · <b>easy</b> · "
-            "<b>repeat</b> · <b>skip</b> · <b>quit</b>"
+            "<b>undo</b> · <b>repeat</b> · <b>skip</b> · <b>quit</b>"
         )
         self.commands.setWordWrap(True)
         self.commands.setStyleSheet("color: palette(mid); font-size: 11px;")

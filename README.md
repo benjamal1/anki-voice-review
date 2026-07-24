@@ -100,9 +100,10 @@ the grade by voice before it is submitted.
 
 | Say | What happens |
 |---|---|
-| your answer, then **done** | grade it |
+| your answer, then **done** | grade it, then straight on to the next card |
+| **undo** (or *go back*) | take back the last grade and put that card in front of you again |
 | just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |
-| **again** / **hard** / **good** / **easy** | set the grade yourself — during the override window, or instead of answering |
+| **again** / **hard** / **good** / **easy** | set the grade yourself. *yes*/*no*/*correct*/*right* also work |
 | **repeat** | read the card again, discard what you had said |
 | **skip** or **bury** | set the card aside and move on. The answer is never shown or read — for image cards and anything that cannot be read aloud. Can also flag the card, see below |
 | **quit** | end the session |
@@ -124,7 +125,8 @@ mis-hearings, not mis-grading. If the transcript is right but the grade is wrong
 | Setting | Default | What it does |
 |---|---|---|
 | End-of-answer word | `done` | the word that finishes your answer |
-| Override window | 2.5 s | how long you get to change the grade by voice |
+| Headphones | off | let you talk over the card being read — say your answer or *skip* the moment you know |
+| Pause after grading | 0 s | 0 goes straight to the next card; say **undo** to take back a grade. Raise it to pause and wait instead |
 | Grading | Automatic | **Automatic** grades for you. **Manual** reads the answer back and waits for you to say good or again — no model needed, no time limit |
 | Correct at or above | 0.62 | similarity needed to be marked correct outright. Lower = more lenient |
 | Incorrect below | 0.30 | similarity below which it is marked wrong outright |
@@ -154,6 +156,27 @@ If nothing can decide — the model is unavailable and similarity is inconclusiv
 is read back and **you** are asked to grade it. It is never guessed. An earlier version split
 the middle band by score in that situation; that was a coin flip wearing a threshold, and it
 produced verdicts that looked authoritative and were not.
+
+### Headphones mode
+
+On speakers, the add-on has to stop listening while it talks, or it transcribes its own voice
+as your answer. That means waiting for the card to finish being read before you can say
+anything.
+
+With headphones nothing it says reaches the microphone, so **Settings → Headphones** lets you
+interrupt: start answering as soon as you know it, or say *skip* the moment you recognise a
+card you cannot do. Whatever you say cuts the speech off immediately.
+
+### Changing the words
+
+Every command accepts several words, and you can change them in
+**Tools → Add-ons → Voice Review → Config** under `command_words`:
+
+```json
+"command_words": { "skip": ["skip", "bury", "next"], "good": ["good", "yes"] }
+```
+
+Actions you do not list keep their defaults.
 
 ### Flagging cards you skip
 

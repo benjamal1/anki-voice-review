@@ -30,6 +30,21 @@ FLAG_BY_NAME = {
 }
 FLAG_NAMES = {value: name for name, value in FLAG_BY_NAME.items()}
 
+# What you can say, and the words that trigger it. Every action accepts several words because
+# speech recognition is not reliable enough to hang a feature on one token, and because people
+# reach for different words. All of it is overridable in the add-on config.
+DEFAULT_COMMAND_WORDS = {
+    "again": ["again", "wrong", "no"],
+    "hard": ["hard"],
+    "good": ["good", "correct", "yes", "right"],
+    "easy": ["easy"],
+    "repeat": ["repeat", "again please", "say again"],
+    # skip and bury are the same action: set the card aside without grading or revealing it.
+    "skip": ["skip", "bury", "pass"],
+    "undo": ["undo", "go back", "back"],
+    "quit": ["quit", "exit", "finish"],
+}
+
 EASE_BY_NAME = {
     "again": EASE_AGAIN,
     "hard": EASE_HARD,
@@ -50,6 +65,22 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         raise SystemExit(f"{name} must be a number, got {raw!r}")
+
+
+def _merge_command_words(supplied) -> dict:
+    """User-supplied words override the defaults per action; unlisted actions keep theirs."""
+    words = {action: list(spoken) for action, spoken in DEFAULT_COMMAND_WORDS.items()}
+    if isinstance(supplied, dict):
+        for action, spoken in supplied.items():
+            if action not in words:
+                continue
+            if isinstance(spoken, str):
+                spoken = [part.strip() for part in spoken.split(",")]
+            if isinstance(spoken, list):
+                cleaned = [str(word).strip() for word in spoken if str(word).strip()]
+                if cleaned:
+                    words[action] = cleaned
+    return words
 
 
 @dataclass(frozen=True)
@@ -89,7 +120,10 @@ class Config:
 
     # --- Session ---
     terminator: str = field(default_factory=lambda: _env_str("AVR_TERMINATOR", "done"))
-    override_window_s: float = field(default_factory=lambda: _env_float("AVR_OVERRIDE_WINDOW", 2.5))
+    # 0 means advance the moment a card is graded, with no pause. Say "undo" afterwards to
+    # take back the last grade — that is strictly better than making every single card wait
+    # for a window that is usually not used.
+    override_window_s: float = field(default_factory=lambda: _env_float("AVR_OVERRIDE_WINDOW", 0.0))
     # "auto"   — text similarity, with the local model deciding what similarity cannot.
     # "manual"  — never grades. Reads the answer out and waits for you to say good or again.
     #
@@ -102,6 +136,15 @@ class Config:
     # 0 = do not flag. Red (1) pairs with the anki-obsidian pipeline, which picks up
     # red-flagged cards for review.
     flag_on_skip: int = field(default_factory=lambda: int(_env_float("AVR_FLAG_ON_SKIP", 0)))
+
+    # Headphones mode: nothing the computer says can reach the microphone, so the echo gate is
+    # unnecessary and you can talk over it. Saying anything while a card is being read cuts the
+    # speech off immediately — say "skip" the moment you recognise a card you cannot answer,
+    # or start answering as soon as you know it, without waiting for the sentence to finish.
+    headphones: bool = False
+
+    # Spoken words per action. See DEFAULT_COMMAND_WORDS.
+    command_words: dict = field(default_factory=lambda: {k: list(v) for k, v in DEFAULT_COMMAND_WORDS.items()})
 
     @property
     def manual(self) -> bool:
@@ -135,6 +178,8 @@ class Config:
             override_window_s=float(pick("override_window_seconds", defaults.override_window_s)),
             grading_mode=str(data.get("grading_mode") or "auto").lower(),
             flag_on_skip=int(data.get("flag_on_skip") or 0),
+            headphones=bool(data.get("headphones", False)),
+            command_words=_merge_command_words(data.get("command_words")),
         )
 
     def validate(self) -> list[str]:
@@ -151,6 +196,9 @@ class Config:
             problems.append("override window must not be negative")
         if not 0 <= self.flag_on_skip <= 7:
             problems.append(f"flag must be 0-7, got {self.flag_on_skip}")
+        for action, spoken in self.command_words.items():
+            if not spoken:
+                problems.append(f"the {action!r} command needs at least one word")
         if self.grading_mode not in ("auto", "manual"):
             problems.append(f"grading mode must be 'auto' or 'manual', got {self.grading_mode!r}")
         return problems

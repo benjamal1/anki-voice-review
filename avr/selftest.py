@@ -38,6 +38,7 @@ class Case:
     manual: bool = False
     forbid_show_answer: bool = False
     flag: int = 0
+    override_window: float = 0.0
 
 
 CASES = [
@@ -85,12 +86,22 @@ CASES = [
         note="no span.cloze is emitted inside MathJax; notation must expand to spoken form",
     ),
     Case(
-        label="spoken ease overrides the verdict",
+        label="grading advances immediately, no pause",
         note_type="Basic",
         fields={"Front": "What is 2 plus 2?", "Back": "4"},
-        script=["four", "done", "again"],
+        script=["four done"],
+        expect_correct=True,
+        expect_ease=EASE_GOOD,
+        note="the default is no override window: grade and move on",
+    ),
+    Case(
+        label="spoken ease overrides the verdict when a window is set",
+        note_type="Basic",
+        fields={"Front": "What colour is the sky?", "Back": "blue"},
+        script=["blue", "done", "again"],
         expect_correct=True,
         expect_ease=EASE_AGAIN,
+        override_window=2.5,
         note="graded correct, but the spoken override must win",
     ),
     Case(
@@ -224,6 +235,8 @@ def run(cfg: Config, keep: bool = False) -> int:
                 case_cfg = replace(case_cfg, grading_mode="manual")
             if case.flag:
                 case_cfg = replace(case_cfg, flag_on_skip=case.flag)
+            if case.override_window:
+                case_cfg = replace(case_cfg, override_window_s=case.override_window)
             runner = Runner(case_cfg, anki, stt, speaker)
             results.append(_run_case(runner, anki, stt, speaker, case))
     finally:

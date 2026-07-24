@@ -126,6 +126,43 @@ class Speaker:
             if dropped:
                 log.debug("echo gate discarded %d buffered line(s)", dropped)
 
+    def start(self, text: str) -> None:
+        """Begin speaking and return immediately, so the caller can keep listening.
+
+        Used in headphones mode: nothing being said can reach the microphone, so there is no
+        reason to stop listening while it talks — and every reason not to, since talking over
+        it is the point.
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+        with self._lock:
+            if self._cancelled:
+                return
+        try:
+            process = subprocess.Popen(
+                self._command(text), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        except FileNotFoundError as exc:
+            raise SpeakerError("`say` not found; this project runs on macOS only") from exc
+        with self._lock:
+            self._process = process
+
+    @property
+    def is_speaking(self) -> bool:
+        with self._lock:
+            process = self._process
+        return process is not None and process.poll() is None
+
+    def wait(self) -> None:
+        with self._lock:
+            process = self._process
+        if process is not None:
+            try:
+                process.wait()
+            except Exception:  # noqa: BLE001 - already terminated
+                pass
+
     @property
     def is_muted(self) -> bool:
         return time.monotonic() < self.muted_until
@@ -144,6 +181,15 @@ class FakeSpeaker:
 
     def resume(self) -> None:
         self.interrupted = False
+
+    def start(self, text: str) -> None:
+        self.speak(text)
+
+    def wait(self) -> None: ...
+
+    @property
+    def is_speaking(self) -> bool:
+        return False
 
     def preflight(self) -> None: ...
 

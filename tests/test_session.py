@@ -9,6 +9,7 @@ from avr.session import (
     AnswerCard,
     BuryCard,
     FlagCard,
+    UndoCard,
     NextCard,
     Phase,
     Quit,
@@ -33,11 +34,16 @@ def always(correct: bool):
     return lambda q, a, t, cfg: Verdict(correct, 1.0 if correct else 0.0, "stub")
 
 
-def session(correct=True, **env):
-    cfg = Config(**env) if env else Config()
-    s = Session(cfg=cfg, grade_fn=always(correct))
+def session(correct=True, **overrides):
+    s = Session(cfg=Config(**overrides), grade_fn=always(correct))
     s.begin_card(CARD)
     return s
+
+
+def windowed(correct=True, seconds=2.5):
+    """A session with the override window switched on. Off by default now: grading advances
+    immediately and "undo" corrects the rare disagreement."""
+    return session(correct=correct, override_window_s=seconds)
 
 
 def of(intents, kind):
@@ -99,7 +105,7 @@ class TestAnswerAccumulation:
         assert s.graded == 1
 
     def test_terminator_triggers_grading(self):
-        s = session(correct=True)
+        s = windowed(correct=True)
         s.on_line("Paris")
         intents = s.on_line("done")
         assert of(intents, ShowAnswer)
@@ -125,7 +131,7 @@ class TestAnswerAccumulation:
 
 class TestVerdictAnnouncement:
     def test_correct_speaks_the_verdict_and_starts_the_window(self):
-        s = session(correct=True)
+        s = windowed(correct=True)
         intents = s.on_line("Paris done")
         assert "Correct" in [i.text for i in of(intents, Speak)]
         assert of(intents, StartOverrideTimer)
@@ -145,14 +151,14 @@ class TestVerdictAnnouncement:
 
 class TestOverrideWindow:
     def test_default_good_on_correct_when_the_window_expires(self):
-        s = session(correct=True)
+        s = windowed(correct=True)
         s.on_line("Paris done")
         intents = s.on_override_expired()
         assert of(intents, AnswerCard)[0].ease == EASE_GOOD
         assert of(intents, NextCard)
 
     def test_default_again_on_incorrect_when_the_window_expires(self):
-        s = session(correct=False)
+        s = windowed(correct=False)
         s.on_line("Berlin done")
         assert of(s.on_override_expired(), AnswerCard)[0].ease == EASE_AGAIN
 
@@ -160,7 +166,7 @@ class TestOverrideWindow:
         "word,ease", [("again", EASE_AGAIN), ("hard", EASE_HARD), ("good", EASE_GOOD), ("easy", EASE_EASY)]
     )
     def test_spoken_ease_overrides_the_graded_default(self, word, ease):
-        s = session(correct=True)  # would default to Good
+        s = windowed(correct=True)  # would default to Good
         s.on_line("Paris done")
         intents = s.on_line(word)
         assert of(intents, AnswerCard)[0].ease == ease
@@ -168,19 +174,19 @@ class TestOverrideWindow:
     def test_override_wins_over_a_later_expiry(self):
         # The runner may still fire the timer after an override landed; that must not
         # double-submit a grade for the same card.
-        s = session(correct=True)
+        s = windowed(correct=True)
         s.on_line("Paris done")
         s.on_line("again")
         assert s.on_override_expired() == []
 
     def test_stray_talk_during_the_window_is_ignored(self):
-        s = session(correct=True)
+        s = windowed(correct=True)
         s.on_line("Paris done")
         assert s.on_line("hmm okay whatever") == []
         assert s.phase is Phase.OVERRIDE
 
     def test_quit_works_during_the_window(self):
-        s = session(correct=True)
+        s = windowed(correct=True)
         s.on_line("Paris done")
         assert of(s.on_line("quit"), Quit)
 
@@ -281,12 +287,12 @@ class TestBareTerminatorMeansIDontKnow:
         assert CARD.answer in spoken
 
     def test_it_defaults_to_again_and_can_still_be_overridden(self):
-        s = session()
+        s = windowed()
         s.on_line("done")
         assert of(s.on_override_expired(), AnswerCard)[0].ease == EASE_AGAIN
 
     def test_override_still_wins_after_a_bare_terminator(self):
-        s = session()
+        s = windowed()
         s.on_line("done")
         assert of(s.on_line("good"), AnswerCard)[0].ease == EASE_GOOD
 
@@ -300,8 +306,13 @@ class TestBuryWithoutRevealing:
     """Image cards and anything unreadable need setting aside without the answer ever being
     shown or spoken."""
 
-    def test_bury_is_a_synonym_for_skip(self):
-        assert match_command("bury") == "bury"
+    def test_bury_and_skip_are_the_same_action(self):
+        # Not synonyms that happen to behave alike — literally the same action.
+        assert match_command("bury") == match_command("skip") == "skip"
+
+    def test_a_trailing_terminator_does_not_break_a_command(self):
+        # Saying "skip done" out of habit must skip, not be graded as the answer "skip".
+        assert match_command("skip done", terminator="done") == "skip"
 
     def test_bury_never_shows_the_answer(self):
         s = session()
@@ -476,3 +487,83 @@ class TestFlagOnSkip:
 
     def test_an_out_of_range_flag_is_reported(self):
         assert Config(flag_on_skip=9).validate()
+
+
+class TestImmediateAdvance:
+    """Grading advances straight to the next card by default. Making every card wait out a
+    window that is usually unused costs more than the rare disagreement, which undo fixes."""
+
+    def test_grading_submits_and_advances_with_no_pause(self):
+        s = session(correct=True)
+        intents = s.on_line("Paris done")
+        assert of(intents, AnswerCard)[0].ease == EASE_GOOD
+        assert of(intents, NextCard)
+        assert not of(intents, StartOverrideTimer)
+        assert s.phase is Phase.LISTENING
+
+    def test_an_incorrect_answer_also_advances_immediately(self):
+        s = session(correct=False)
+        intents = s.on_line("Berlin done")
+        assert of(intents, AnswerCard)[0].ease == EASE_AGAIN
+        assert of(intents, NextCard)
+
+    def test_the_answer_is_still_read_back_when_wrong(self):
+        s = session(correct=False)
+        assert CARD.answer in [i.text for i in of(s.on_line("Berlin done"), Speak)]
+
+    def test_a_window_can_still_be_configured(self):
+        s = windowed(correct=True, seconds=2.0)
+        intents = s.on_line("Paris done")
+        assert of(intents, StartOverrideTimer)[0].seconds == 2.0
+        assert not of(intents, AnswerCard), "nothing is submitted until the window closes"
+
+
+class TestUndo:
+    def test_undo_after_a_grade_emits_an_undo_intent(self):
+        s = session(correct=True)
+        s.on_line("Paris done")
+        assert of(s.on_line("undo"), UndoCard)
+
+    def test_undo_rolls_back_the_tally(self):
+        s = session(correct=True)
+        s.on_line("Paris done")
+        assert (s.graded, s.correct) == (1, 1)
+        s.on_line("undo")
+        assert (s.graded, s.correct) == (0, 0)
+
+    def test_undo_with_nothing_graded_says_so_and_does_nothing(self):
+        s = session()
+        intents = s.on_line("undo")
+        assert not of(intents, UndoCard)
+        assert "Nothing to undo" in [i.text for i in of(intents, Speak)]
+
+    def test_undo_works_while_awaiting_a_manual_grade(self):
+        s = Session(cfg=Config(grading_mode="manual"), grade_fn=always(True))
+        s.begin_card(CARD)
+        s.on_line("done")
+        s.on_line("good")
+        s.on_line("done")
+        assert of(s.on_line("undo"), UndoCard)
+
+    def test_go_back_is_the_same_as_undo(self):
+        assert match_command("go back") == match_command("undo") == "undo"
+
+
+class TestConfigurableCommandWords:
+    def test_defaults_include_natural_synonyms(self):
+        assert match_command("yes") == "good"
+        assert match_command("no") == "again"
+        assert match_command("pass") == "skip"
+
+    def test_words_can_be_replaced(self):
+        cfg = Config(command_words={**Config().command_words, "skip": ["next"]})
+        s = Session(cfg=cfg, grade_fn=always(True))
+        s.begin_card(CARD)
+        assert of(s.on_line("next"), BuryCard)
+
+    def test_replacing_one_action_leaves_the_others_alone(self):
+        cfg = Config(command_words={**Config().command_words, "skip": ["next"]})
+        assert match_command("good", cfg.command_words) == "good"
+
+    def test_an_empty_word_list_is_reported(self):
+        assert Config(command_words={**Config().command_words, "skip": []}).validate()

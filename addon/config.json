@@ -1,6 +1,7 @@
 {
   "terminator": "done",
-  "override_window_seconds": 2.5,
+  "override_window_seconds": 0,
+  "headphones": false,
   "grading_mode": "auto",
   "flag_on_skip": 0,
   "fuzzy_correct": 0.62,
