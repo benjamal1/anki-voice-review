@@ -146,6 +146,63 @@ def strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Symbols nobody pronounces as symbols. Without expanding these, "2^K" normalises to "2 k"
+# while the spoken answer transcribes as "2 to the power of K", scoring 0.22 — below the
+# clearly-wrong floor, so a correct answer is marked wrong and never even reaches the judge.
+# Both sides go through the same expansion, so the comparison stays consistent.
+#
+# Deliberately excluded: "-" (would turn "K-bit" into "k minus bit") and "/" (ambiguous
+# between "over" and "per", and it appears in dates and paths).
+MATH_SPEECH = {
+    "^": " to the power of ",
+    "√": " square root of ",
+    "×": " times ",
+    "⋅": " times ",
+    "·": " times ",
+    "÷": " divided by ",
+    "=": " equals ",
+    "≠": " not equal to ",
+    "≈": " approximately ",
+    "≤": " less than or equal to ",
+    "≥": " greater than or equal to ",
+    "<": " less than ",
+    ">": " greater than ",
+    "+": " plus ",
+    "±": " plus or minus ",
+    "%": " percent ",
+    "°": " degrees ",
+    "∞": " infinity ",
+    "_": " sub ",
+}
+
+# LaTeX survives delimiter stripping as bare commands, so map the common ones too.
+LATEX_SPEECH = {
+    r"\times": " times ",
+    r"\cdot": " times ",
+    r"\div": " divided by ",
+    r"\leq": " less than or equal to ",
+    r"\le": " less than or equal to ",
+    r"\geq": " greater than or equal to ",
+    r"\ge": " greater than or equal to ",
+    r"\neq": " not equal to ",
+    r"\ne": " not equal to ",
+    r"\approx": " approximately ",
+    r"\pm": " plus or minus ",
+    r"\sqrt": " square root of ",
+    r"\infty": " infinity ",
+    r"\frac": " ",
+}
+
+
+def expand_math(text: str) -> str:
+    """Rewrite mathematical notation the way a person would read it aloud."""
+    for command, spoken in LATEX_SPEECH.items():
+        text = text.replace(command, spoken)
+    for symbol, spoken in MATH_SPEECH.items():
+        text = text.replace(symbol, spoken)
+    return text
+
+
 def normalize(text: str) -> str:
     """Fold to the form used for comparison: lowercase, unaccented, punctuation-free.
 
@@ -156,6 +213,8 @@ def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = text.lower()
+    # Before punctuation is stripped, or "^" and "=" vanish and take their meaning with them.
+    text = expand_math(text)
     text = re.sub(r"[^\w\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 

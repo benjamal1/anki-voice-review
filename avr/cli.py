@@ -193,6 +193,20 @@ def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_selftest(cfg: Config, args: argparse.Namespace) -> int:
+    """Drive the whole loop against real Anki, scripting the microphone.
+
+    Creates its own deck, reviews only cards it created, and deletes them afterwards.
+    """
+    from .selftest import run as run_selftest
+
+    try:
+        return run_selftest(cfg, keep=args.keep)
+    except AnkiError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="avr", description="Hands-free voice review for Anki (macOS only)."
@@ -215,6 +229,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("listen", help="live transcription + echo gate test").set_defaults(
         func=cmd_listen
     )
+
+    selftest = sub.add_parser(
+        "selftest",
+        help="end-to-end test against live Anki using a throwaway deck (no mic needed)",
+    )
+    selftest.add_argument(
+        "--keep", action="store_true", help="leave the throwaway deck behind for inspection"
+    )
+    selftest.set_defaults(func=cmd_selftest)
+
     sub.add_parser("review", help="run the hands-free review loop").set_defaults(func=cmd_review)
     return parser
 

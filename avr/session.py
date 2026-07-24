@@ -53,6 +53,16 @@ class NextCard:
 
 
 @dataclass(frozen=True)
+class BuryCard:
+    """Set the current card aside for this session without grading it.
+
+    Anki has no "skip": the reviewer only advances when a card is answered, and answering is
+    a grade. Bury is the real primitive — it is what the reviewer's own `-` shortcut does.
+    Without it, "skip" advanced to the card that was already showing and simply read it again.
+    """
+
+
+@dataclass(frozen=True)
 class StartOverrideTimer:
     seconds: float
 
@@ -64,7 +74,7 @@ class Quit:
 
 # typing.Union, not `A | B`: this is a runtime expression, and Anki 25.02.5 bundles Python 3.9
 # where `|` on classes raises TypeError. The add-on imports this module inside Anki.
-Intent = Union[Speak, ShowAnswer, AnswerCard, NextCard, StartOverrideTimer, Quit]
+Intent = Union[Speak, ShowAnswer, AnswerCard, NextCard, BuryCard, StartOverrideTimer, Quit]
 
 
 def match_command(line: str) -> str | None:
@@ -169,7 +179,9 @@ class Session:
 
         if command == "skip":
             self.phase = Phase.LISTENING
-            return [Speak("Skipping"), NextCard()]
+            # Bury first: without it the loop "advances" to the card already showing and
+            # reads it again, which is what skip used to do.
+            return [Speak("Skipping"), BuryCard(), NextCard()]
 
         if command == "repeat":
             # Restart the answer too — whatever was captured was against a card the user has

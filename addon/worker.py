@@ -16,6 +16,7 @@ from .avr.config import Config
 from .avr.grade import grade
 from .avr.session import (
     AnswerCard,
+    BuryCard,
     NextCard,
     Quit,
     Session,
@@ -96,6 +97,10 @@ class VoiceWorker(threading.Thread):
 
             elif isinstance(intent, StartOverrideTimer):
                 self._override_deadline = time.monotonic() + intent.seconds
+
+            elif isinstance(intent, BuryCard):
+                if not self.bridge.bury_current():
+                    self.on_error("Could not skip this card.")
 
             elif isinstance(intent, NextCard):
                 self._override_deadline = None

@@ -22,6 +22,17 @@ log = logging.getLogger(__name__)
 # A containment window must be at least this similar before it counts as "they said it".
 CONTAINMENT_MIN = 0.8
 
+# Short answers need a stricter bar before being auto-marked correct without the judge.
+#
+# String similarity measures characters, but meaning lives in tokens. On a terse answer one
+# wrong token IS the answer, while barely moving the score: "2^K" against a spoken "2 to the
+# power of N" scores 0.947 once notation is expanded, comfortably above the normal 0.75, so
+# naming the wrong variable would sail through as correct. Demanding near-identity on short
+# answers routes those to the judge instead. Long answers are unaffected — there, a single
+# differing word genuinely is a small error.
+SHORT_ANSWER_TOKENS = 3
+SHORT_ANSWER_CORRECT = 0.95
+
 JUDGE_PROMPT = """You are grading a flashcard answer spoken aloud and transcribed by speech recognition.
 
 Question: {question}
@@ -134,11 +145,23 @@ def ask_judge(question: str, answer: str, transcript: str, cfg: Config) -> bool 
     return None
 
 
+def correct_threshold(answer: str, cfg: Config) -> float:
+    """The similarity a spoken answer must reach to be marked correct with no model call.
+
+    Terse answers get a stricter bar — see SHORT_ANSWER_CORRECT. Counted on the raw answer,
+    before notation expansion, because "2^K" is one idea however many words it expands into.
+    """
+    if len(answer.split()) <= SHORT_ANSWER_TOKENS:
+        return max(cfg.fuzzy_correct, SHORT_ANSWER_CORRECT)
+    return cfg.fuzzy_correct
+
+
 def grade(question: str, answer: str, transcript: str, cfg: Config) -> Verdict:
     """Fuzzy first; the judge only sees the ambiguous band."""
     score = fuzzy_score(answer, transcript)
+    correct_at = correct_threshold(answer, cfg)
 
-    if score >= cfg.fuzzy_correct:
+    if score >= correct_at:
         return Verdict(True, score, "fuzzy", "clear match")
     if score < cfg.fuzzy_wrong:
         return Verdict(False, score, "fuzzy", "clearly different")

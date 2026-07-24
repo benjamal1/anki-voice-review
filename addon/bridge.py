@@ -113,6 +113,32 @@ class AnkiBridge:
 
         run_on_main(answer)
 
+    def bury_current(self) -> bool:
+        """Set the current card aside for this session, without grading it.
+
+        This is what "skip" needs. The reviewer only advances when a card is answered, and
+        answering is a grade — so without burying, skip landed back on the same card and read
+        it again. Bury is the reviewer's own `-` shortcut.
+
+        Prefers the reviewer's method when present and falls back to the scheduler directly,
+        since this is the one call whose exact name has moved between Anki versions.
+        """
+
+        def bury() -> bool:
+            if not self._review_active():
+                return False
+            reviewer = self._reviewer()
+            card = reviewer.card
+            method = getattr(reviewer, "bury_current_card", None)
+            if callable(method):
+                method()
+                return True
+            mw.col.sched.bury_cards([card.id])
+            mw.reset()  # refresh the reviewer so it moves off the buried card
+            return True
+
+        return bool(run_on_main(bury))
+
     def reviewer_state(self) -> Optional[str]:
         """'question', 'answer', or None when not reviewing."""
 

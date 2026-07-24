@@ -8,7 +8,7 @@ import pytest
 
 from avr import grade as grade_mod
 from avr.config import Config
-from avr.grade import fuzzy_score, grade
+from avr.grade import SHORT_ANSWER_CORRECT, correct_threshold, fuzzy_score, grade
 
 
 def _fake_urlopen(body: str):
@@ -172,3 +172,55 @@ class TestThresholdConfig:
         monkeypatch.setenv("AVR_FUZZY_CORRECT", "0.2")
         monkeypatch.setenv("AVR_FUZZY_WRONG", "0.8")
         assert Config().validate(), "inverted thresholds must be flagged"
+
+
+class TestMathNotation:
+    """Spoken maths transcribes as words; cards write it as symbols. Without expansion a
+    correct answer to a maths cloze scores 0.22 — below the clearly-wrong floor, so it is
+    marked wrong and never even reaches the judge."""
+
+    def test_power_notation_matches_spoken_form(self, cfg):
+        assert fuzzy_score("2^K", "2 to the power of K") >= 0.95
+
+    def test_power_notation_with_terminator_stripped(self, cfg):
+        assert fuzzy_score("2^K", "2 to the power of K done.") >= 0.95
+
+    def test_equals_is_pronounced(self, cfg):
+        assert fuzzy_score("L = 2^K", "L equals 2 to the power of K") >= 0.95
+
+    def test_hyphenated_words_are_not_turned_into_minus(self, cfg):
+        # "-" is deliberately not expanded: "K-bit" must not become "k minus bit".
+        assert fuzzy_score("K-bit", "K-bit") == 1.0
+
+    def test_latex_commands_are_spoken(self, cfg):
+        assert fuzzy_score(r"a \times b", "a times b") >= 0.95
+
+
+class TestShortAnswerStrictness:
+    def test_wrong_variable_in_a_short_answer_is_not_auto_correct(self, cfg, monkeypatch):
+        # 0.947 on a long expanded string, but naming the wrong variable is the whole answer
+        # being wrong. It must reach the judge rather than sail through as correct.
+        calls = stub_judge(monkeypatch, False)
+        verdict = grade("q", "2^K", "2 to the power of N", cfg)
+        assert not verdict.correct
+        assert verdict.source == "judge"
+        assert len(calls) == 1
+
+    def test_the_right_variable_still_passes_without_the_judge(self, cfg, monkeypatch):
+        calls = stub_judge(monkeypatch, False)
+        verdict = grade("q", "2^K", "2 to the power of K", cfg)
+        assert verdict.correct
+        assert verdict.source == "fuzzy"
+        assert calls == []
+
+    def test_a_long_answer_keeps_the_normal_threshold(self, cfg):
+        answer = "the sinoatrial node located in the right atrium"
+        assert correct_threshold(answer, cfg) == cfg.fuzzy_correct
+
+    def test_a_short_answer_gets_the_strict_threshold(self, cfg):
+        assert correct_threshold("2^K", cfg) == SHORT_ANSWER_CORRECT
+
+    def test_containment_still_rescues_a_short_answer_in_a_sentence(self, cfg, monkeypatch):
+        calls = stub_judge(monkeypatch, False)
+        verdict = grade("q", "Paris", "The capital of France is Paris.", cfg)
+        assert verdict.correct and calls == []

@@ -16,6 +16,7 @@ from .config import Config
 from .grade import grade
 from .session import (
     AnswerCard,
+    BuryCard,
     Intent,
     NextCard,
     Quit,
@@ -50,6 +51,7 @@ class Runner:
         self._override_deadline: float | None = None
         self._card_started = 0.0
         self._running = False
+        self._skip_unsupported = False
 
     # --- intent execution ---
 
@@ -74,7 +76,18 @@ class Runner:
             elif isinstance(intent, StartOverrideTimer):
                 self._override_deadline = time.monotonic() + intent.seconds
 
+            elif isinstance(intent, BuryCard):
+                # AnkiConnect exposes no bury action (checked: none of its 121 actions), so
+                # skip cannot work over HTTP. Say so rather than silently re-reading the card,
+                # which is what the old behaviour amounted to. The add-on, running inside
+                # Anki, has the scheduler API and does support it.
+                self._skip_unsupported = True
+                self.tts.speak("Skip is not available from the command line", gate=self.stt)
+
             elif isinstance(intent, NextCard):
+                if self._skip_unsupported:
+                    self._skip_unsupported = False
+                    continue  # stay on this card; there is nothing to advance to
                 self._override_deadline = None
                 pending.extend(self._advance())
 
