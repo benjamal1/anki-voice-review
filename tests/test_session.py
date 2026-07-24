@@ -9,6 +9,7 @@ from avr.session import (
     AnswerCard,
     BuryCard,
     FlagCard,
+    RegradeCard,
     UndoCard,
     NextCard,
     Phase,
@@ -567,3 +568,64 @@ class TestConfigurableCommandWords:
 
     def test_an_empty_word_list_is_reported(self):
         assert Config(command_words={**Config().command_words, "skip": []}).validate()
+
+
+class TestUndoWaitsInsteadOfRereading:
+    """After an undo you have just heard the card and disagreed with the verdict. Reading the
+    question again is noise; the only thing left is to say how it should have been graded."""
+
+    def graded_once(self):
+        s = session(correct=True)
+        s.on_line("Paris done")
+        return s
+
+    def test_undo_does_not_reread_the_question(self):
+        s = self.graded_once()
+        spoken = [i.text for i in of(s.on_line("undo"), Speak)]
+        assert CARD.question not in spoken
+
+    def test_undo_waits_for_an_ease(self):
+        s = self.graded_once()
+        s.on_line("undo")
+        assert s.phase is Phase.AWAITING_EASE
+
+    def test_it_acknowledges_briefly(self):
+        s = self.graded_once()
+        spoken = [i.text for i in of(s.on_line("undo"), Speak)]
+        assert spoken == ["Undone"]
+
+    def test_the_acknowledgement_is_not_the_terminator_word(self):
+        # Saying the terminator into an open mic invites being transcribed back as a command.
+        s = self.graded_once()
+        spoken = [i.text.lower() for i in of(s.on_line("undo"), Speak)]
+        assert Config().terminator.lower() not in spoken
+
+    def test_the_next_thing_said_regrades_the_card_by_name(self):
+        # Undo reverts the scheduling but leaves the reviewer on the card it moved to, so the
+        # correction has to name the original card rather than grading what is on screen.
+        s = self.graded_once()
+        s.on_line("undo")
+        intents = s.on_line("again")
+        regrade = of(intents, RegradeCard)[0]
+        assert regrade.ease == EASE_AGAIN
+        assert regrade.card_id == CARD.card_id
+
+    def test_regrading_does_not_advance(self):
+        # The card in front of the user has not been answered yet.
+        s = self.graded_once()
+        s.on_line("undo")
+        intents = s.on_line("again")
+        assert not of(intents, NextCard)
+        assert not of(intents, AnswerCard), "must not grade whatever is on screen"
+
+    def test_grading_after_undo_counts_once(self):
+        s = self.graded_once()
+        s.on_line("undo")
+        s.on_line("again")
+        assert s.graded == 1 and s.correct == 0
+
+    def test_resume_card_does_not_speak_or_change_phase(self):
+        s = self.graded_once()
+        s.on_line("undo")
+        assert s.resume_card(CARD) == []
+        assert s.phase is Phase.AWAITING_EASE

@@ -18,6 +18,7 @@ from .avr.session import (
     AnswerCard,
     BuryCard,
     FlagCard,
+    RegradeCard,
     UndoCard,
     NextCard,
     Quit,
@@ -132,9 +133,15 @@ class VoiceWorker(threading.Thread):
             elif isinstance(intent, UndoCard):
                 if self.bridge.undo():
                     self._override_deadline = None
-                    pending.extend(self._present_current())
+                    self.on_phase(PHASE_AWAITING, "")
                 else:
                     self.on_error("Anki had nothing to undo.")
+
+            elif isinstance(intent, RegradeCard):
+                if not self.bridge.regrade(intent.card_id, intent.ease):
+                    self.on_error("Could not re-grade that card.")
+                # The reviewer never moved, so the user is still on an unanswered card.
+                self._reattach_current()
 
             elif isinstance(intent, FlagCard):
                 if not self.bridge.set_flag(intent.flag):
@@ -169,15 +176,15 @@ class VoiceWorker(threading.Thread):
                 return True
         return False
 
-    def _present_current(self) -> list:
-        """Re-read whatever card the reviewer is now showing, without advancing."""
+    def _reattach_current(self) -> None:
+        """Point the session at the card the reviewer is showing, without re-reading it."""
         try:
             card = self.bridge.current_card()
         except BridgeError:
-            return []
+            return
         self._last_card_id = card.card_id
         self.on_card(card.question)
-        return self.session.begin_card(card)
+        self.session.resume_card(card)
 
     def _advance(self) -> list:
         # Answering is asynchronous; without waiting for the reviewer to present a fresh

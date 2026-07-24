@@ -60,7 +60,20 @@ class NextCard:
 
 @dataclass(frozen=True)
 class UndoCard:
-    """Take back the last grade and put that card back in front of you."""
+    """Revert the last grade in Anki's scheduler."""
+
+
+@dataclass(frozen=True)
+class RegradeCard:
+    """Apply an ease to a specific card, not to whichever card the reviewer is showing.
+
+    Undo reverts the scheduling but leaves the reviewer on the card it had already moved to —
+    verified against a live collection. So re-grading has to name the card explicitly rather
+    than going through the reviewer.
+    """
+
+    card_id: int
+    ease: int
 
 
 @dataclass(frozen=True)
@@ -100,6 +113,7 @@ Intent = Union[
     FlagCard,
     BuryCard,
     UndoCard,
+    RegradeCard,
     StartOverrideTimer,
     Quit,
 ]
@@ -160,6 +174,8 @@ class Session:
     pending_ease: int = EASE_GOOD
     last_verdict: Verdict | None = None
     last_transcript: str = ""
+    previous_card: Card | None = None  # the card the last grade was applied to
+    regrading: Card | None = None  # set while a grade is being taken back and redone
     graded: int = 0
     correct: int = 0
 
@@ -172,6 +188,18 @@ class Session:
         self.last_verdict = None
         self.last_transcript = ""
         return [Speak(card.question)]
+
+    def resume_card(self, card: Card) -> list[Intent]:
+        """Attach to the card now showing without reading it out or changing phase.
+
+        Used after an undo: the card comes back, but the user is mid-decision and does not
+        need to hear the question again.
+        """
+        self.card = card
+        self.buffer = []
+        self.last_verdict = None
+        self.last_transcript = ""
+        return []
 
     # --- events ---
 
@@ -221,6 +249,15 @@ class Session:
             self.graded += 1
             if ease >= EASE_GOOD:
                 self.correct += 1
+
+            if self.regrading is not None:
+                # Correcting a grade already given. The reviewer has moved on, so name the
+                # card instead of grading whatever happens to be on screen — and do not
+                # advance, because the card in front of the user has not been answered yet.
+                card, self.regrading = self.regrading, None
+                return [RegradeCard(card.card_id, ease)]
+
+            self.previous_card = self.card
             return [AnswerCard(ease), NextCard()]
         if command == "quit":
             self.phase = Phase.FINISHED
@@ -238,6 +275,7 @@ class Session:
         command = self._command(line)
         if command in EASE_COMMANDS:
             self.phase = Phase.LISTENING
+            self.previous_card = self.card
             return [AnswerCard(EASE_BY_NAME[command]), NextCard()]
         if command == "quit":
             self.phase = Phase.FINISHED
@@ -269,6 +307,7 @@ class Session:
         self.graded += 1
         if ease >= EASE_GOOD:
             self.correct += 1
+        self.previous_card = self.card
         return [ShowAnswer(), AnswerCard(ease), NextCard()]
 
     def _undo(self) -> list[Intent]:
@@ -278,12 +317,22 @@ class Session:
         card wait out a window that is usually unused, the rare disagreement is corrected
         after the fact.
         """
-        if not self.graded:
+        if not self.graded or self.previous_card is None:
             return [Speak("Nothing to undo")]
         self.graded -= 1
         if self.last_verdict is not None and self.last_verdict.correct:
             self.correct = max(0, self.correct - 1)
-        self.phase = Phase.LISTENING
+
+        self.regrading = self.previous_card
+        self.previous_card = None
+
+        # Wait for the grade rather than re-reading the card. You have just heard it and
+        # decided you disagree with the verdict — being read the question again is noise, and
+        # the only thing left to do is say how it should have been graded.
+        self.phase = Phase.AWAITING_EASE
+
+        # "Undone", not "done": the terminator word spoken into an open microphone invites
+        # being transcribed straight back as a command, which in headphones mode it would be.
         return [Speak("Undone"), UndoCard()]
 
     def _set_aside(self) -> list[Intent]:
@@ -371,6 +420,7 @@ class Session:
             # usually unused costs more than the rare disagreement, which "undo" fixes after
             # the fact.
             self.phase = Phase.LISTENING
+            self.previous_card = self.card
             intents.append(AnswerCard(self.pending_ease))
             intents.append(NextCard())
             return intents

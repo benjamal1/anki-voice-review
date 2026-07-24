@@ -101,7 +101,7 @@ the grade by voice before it is submitted.
 | Say | What happens |
 |---|---|
 | your answer, then **done** | grade it, then straight on to the next card |
-| **undo** (or *go back*) | take back the last grade and put that card in front of you again |
+| **undo** (or *go back*) | take back the last grade. It says "undone" and waits — nothing is read out, just say how it should have been graded and it is applied to that card |
 | just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |
 | **again** / **hard** / **good** / **easy** | set the grade yourself. *yes*/*no*/*correct*/*right* also work |
 | **repeat** | read the card again, discard what you had said |
@@ -156,6 +156,17 @@ If nothing can decide — the model is unavailable and similarity is inconclusiv
 is read back and **you** are asked to grade it. It is never guessed. An earlier version split
 the middle band by score in that situation; that was a coin flip wearing a threshold, and it
 produced verdicts that looked authoritative and were not.
+
+### Undo
+
+Grading moves straight to the next card, so **undo** is how you correct a verdict you
+disagree with. It says "undone" and waits. Nothing is read out — you have just heard the card
+and made up your mind, so the only thing left is to say **again**, **hard**, **good** or
+**easy**, and that is applied to the card you were correcting.
+
+You stay on the card in front of you, which has not been answered yet. Anki's undo reverts the
+scheduling but does not move the reviewer backwards, so the correction names the card
+explicitly rather than grading whatever is on screen.
 
 ### Headphones mode
 

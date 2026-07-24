@@ -86,6 +86,20 @@ class AnkiConnect:
             raise ValueError(f"ease must be 1-4, got {ease}")
         self.invoke("guiAnswerCard", ease=ease)
 
+    def undo(self) -> bool:
+        """Take back the last answer. Unlike bury and flag, AnkiConnect does expose this."""
+        try:
+            return bool(self.invoke("guiUndo"))
+        except AnkiError:
+            return False
+
+    def regrade(self, card_id: int, ease: int) -> bool:
+        """Grade a specific card without going through the reviewer."""
+        if ease not in (1, 2, 3, 4):
+            raise ValueError(f"ease must be 1-4, got {ease}")
+        result = self.invoke("answerCards", answers=[{"cardId": card_id, "ease": ease}])
+        return bool(result and all(result))
+
     def preflight(self) -> Card:
         """Prove the whole path works before the session starts talking to a wall.
 

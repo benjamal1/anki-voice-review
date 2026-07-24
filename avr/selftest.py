@@ -39,6 +39,8 @@ class Case:
     forbid_show_answer: bool = False
     flag: int = 0
     override_window: float = 0.0
+    expect_undo_to_card: bool = False
+    expect_reviewer_ease: Optional[int] = None
 
 
 CASES = [
@@ -103,6 +105,17 @@ CASES = [
         expect_ease=EASE_AGAIN,
         override_window=2.5,
         note="graded correct, but the spoken override must win",
+    ),
+    Case(
+        label="undo takes back a grade and waits",
+        note_type="Basic",
+        fields={"Front": "Which planet is closest to the sun?", "Back": "Mercury"},
+        script=["Mercury done", "undo", "again"],
+        expect_correct=True,
+        expect_ease=EASE_AGAIN,
+        expect_undo_to_card=True,
+        expect_reviewer_ease=EASE_GOOD,
+        note="graded correct and advanced; undo pulls it back and the spoken ease wins",
     ),
     Case(
         label="bare end word means I don't know",
@@ -277,6 +290,7 @@ def _run_case(runner: Runner, anki: AnkiConnect, stt, speaker, case: Case) -> Re
 
     submitted: list = []
     revealed: list = []
+    regraded: list = []
     original_answer = anki.answer_card
     original_show = anki.show_answer
 
@@ -285,6 +299,14 @@ def _run_case(runner: Runner, anki: AnkiConnect, stt, speaker, case: Case) -> Re
         original_show()
 
     anki.show_answer = record_show  # type: ignore[method-assign]
+
+    original_regrade = anki.regrade
+
+    def record_regrade(card_id: int, ease: int) -> bool:
+        regraded.append((card_id, ease))
+        return original_regrade(card_id, ease)
+
+    anki.regrade = record_regrade  # type: ignore[method-assign]
 
     def record(ease: int) -> None:
         submitted.append(ease)
@@ -304,21 +326,32 @@ def _run_case(runner: Runner, anki: AnkiConnect, stt, speaker, case: Case) -> Re
     finally:
         anki.answer_card = original_answer  # type: ignore[method-assign]
         anki.show_answer = original_show  # type: ignore[method-assign]
+        anki.regrade = original_regrade  # type: ignore[method-assign]
 
     elapsed = time.monotonic() - started
     verdict = session.last_verdict
 
     problems = []
+    if case.expect_undo_to_card:
+        # Undo reverts the scheduling but leaves the reviewer where it moved to, so the
+        # correction must land on the ORIGINAL card and must not re-read anything.
+        if regraded != [(before_id, case.expect_ease)]:
+            problems.append(f"expected the original card re-graded, got {regraded}")
+        spoken = " ".join(speaker.said)
+        if case.fields.get("Front", "") and case.fields["Front"] in spoken.split("Undone")[-1]:
+            problems.append("the card was read out again after undo")
+
     if case.forbid_show_answer and revealed:
         problems.append("the answer was revealed on a card that should have been buried unseen")
     if case.expect_ease is None:
         if submitted:
             problems.append(f"expected no grade, but submitted ease {submitted}")
     else:
+        wanted = case.expect_reviewer_ease if case.expect_reviewer_ease else case.expect_ease
         if not submitted:
             problems.append("no grade was submitted")
-        elif submitted[-1] != case.expect_ease:
-            problems.append(f"expected ease {case.expect_ease}, got {submitted[-1]}")
+        elif submitted[-1] != wanted:
+            problems.append(f"expected ease {wanted}, got {submitted[-1]}")
 
     if case.manual and session.last_verdict is not None:
         if not getattr(session.last_verdict, "needs_human", False):

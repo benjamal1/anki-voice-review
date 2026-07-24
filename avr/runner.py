@@ -18,6 +18,8 @@ from .session import (
     AnswerCard,
     BuryCard,
     FlagCard,
+    RegradeCard,
+    UndoCard,
     Intent,
     NextCard,
     Quit,
@@ -77,6 +79,16 @@ class Runner:
             elif isinstance(intent, StartOverrideTimer):
                 self._override_deadline = time.monotonic() + intent.seconds
 
+            elif isinstance(intent, UndoCard):
+                if not self.anki.undo():
+                    log.warning("Anki had nothing to undo")
+                self._override_deadline = None
+
+            elif isinstance(intent, RegradeCard):
+                if not self.anki.regrade(intent.card_id, intent.ease):
+                    log.warning("could not re-grade card %s", intent.card_id)
+                self._reattach_current()
+
             elif isinstance(intent, FlagCard):
                 # AnkiConnect has no flag action either, same as bury. The add-on does this
                 # through the collection; over HTTP it is simply not available.
@@ -119,6 +131,13 @@ class Runner:
             except AnkiError:
                 return
             time.sleep(poll)
+
+    def _reattach_current(self) -> None:
+        """Point the session at the card now showing, without reading it out again."""
+        try:
+            self.session.resume_card(self.anki.current_card())
+        except AnkiError:
+            pass
 
     def _record_timing(self) -> None:
         if not self._card_started:

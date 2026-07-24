@@ -227,6 +227,26 @@ class AnkiBridge:
 
         return bool(run_on_main(revert))
 
+    def regrade(self, card_id: int, ease: int) -> bool:
+        """Apply an ease to a specific card, bypassing the reviewer.
+
+        Needed because undo reverts the scheduling but leaves the reviewer on the card it had
+        already advanced to, so a correction cannot go through the reviewer without grading
+        the wrong card.
+        """
+        if ease not in (1, 2, 3, 4):
+            raise ValueError(f"ease must be 1-4, got {ease}")
+
+        def apply() -> bool:
+            card = mw.col.get_card(card_id)
+            if card is None:
+                return False
+            mw.col.sched.answer_card(card, ease)
+            mw.reset()
+            return True
+
+        return bool(run_on_main(apply))
+
     def reviewer_state(self) -> Optional[str]:
         """'question', 'answer', or None when not reviewing."""
 
