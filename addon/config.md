@@ -21,8 +21,6 @@ ollama pull qwen2.5:3b        # optional, only for ambiguous answers
 | `command_words` | The words for each action. Every action takes a list, so add your own: `{"skip": ["skip", "bury", "next"]}`. |
 | `flag_on_skip` | 0-7. Also flag the card when you skip it. 1 is red. |
 | `grading_mode` | `auto` grades for you. `manual` reads the answer back and waits for you to say good or again — no model needed. |
-| `fuzzy_correct` | At or above this similarity, correct without asking the model. |
-| `fuzzy_wrong` | Below this similarity, incorrect without asking the model. Between the two, the model decides. |
 | `whisper_binary` | Name or absolute path. Homebrew locations are searched automatically. |
 | `whisper_model` | Swap in `ggml-small.en.bin` for better accuracy and worse latency. |
 | `say_voice` | Blank uses the system default. Any voice from System Settings → Accessibility → Spoken Content. |

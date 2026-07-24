@@ -22,17 +22,6 @@ log = logging.getLogger(__name__)
 # A containment window must be at least this similar before it counts as "they said it".
 CONTAINMENT_MIN = 0.8
 
-# Short answers need a stricter bar before being auto-marked correct without the judge.
-#
-# String similarity measures characters, but meaning lives in tokens. On a terse answer one
-# wrong token IS the answer, while barely moving the score: "2^K" against a spoken "2 to the
-# power of N" scores 0.947 once notation is expanded, comfortably above the normal 0.75, so
-# naming the wrong variable would sail through as correct. Demanding near-identity on short
-# answers routes those to the judge instead. Long answers are unaffected — there, a single
-# differing word genuinely is a small error.
-SHORT_ANSWER_TOKENS = 3
-SHORT_ANSWER_CORRECT = 0.95
-
 JUDGE_PROMPT = """You are grading a flashcard answer spoken aloud and transcribed by speech recognition.
 
 Question: {question}
@@ -174,40 +163,29 @@ def prewarm(cfg: Config) -> bool:
         return False
 
 
-def correct_threshold(answer: str, cfg: Config) -> float:
-    """The similarity a spoken answer must reach to be marked correct with no model call.
-
-    Terse answers get a stricter bar — see SHORT_ANSWER_CORRECT. Counted on the raw answer,
-    before notation expansion, because "2^K" is one idea however many words it expands into.
-
-    The strict bar exists to *route* a close-but-maybe-wrong short answer to a second opinion,
-    so it only applies when automatic grading is in play at all.
-    """
-    if not cfg.manual and len(answer.split()) <= SHORT_ANSWER_TOKENS:
-        return max(cfg.fuzzy_correct, SHORT_ANSWER_CORRECT)
-    return cfg.fuzzy_correct
-
-
 def grade(question: str, answer: str, transcript: str, cfg: Config) -> Verdict:
-    """Fuzzy first; the judge only sees the ambiguous band."""
+    """The model judges every answer. No fuzzy string matching.
+
+    Fuzzy was removed: spoken answers vary too much for a character-similarity threshold, and
+    every threshold was a guess that mis-graded reworded-but-correct answers. The local model
+    judges meaning directly, which is the only thing that actually works for speech.
+
+    The one non-model shortcut kept is exact equality after normalisation — if what you said
+    IS the answer, that is not a judgement call and does not need the model, so it returns
+    instantly. This is equality, not similarity: it either matches exactly or goes to the model.
+    """
     if cfg.manual:
         # The user grades every card themselves, so any automatic verdict is wasted latency.
         return Verdict(False, 0.0, "manual", "user grades this", needs_human=True)
 
-    score = fuzzy_score(answer, transcript)
-    correct_at = correct_threshold(answer, cfg)
-
-    if score >= correct_at:
-        return Verdict(True, score, "fuzzy", "clear match")
-    if score < cfg.fuzzy_wrong:
-        return Verdict(False, score, "fuzzy", "clearly different")
+    if normalize(answer) and normalize(transcript) == normalize(answer):
+        return Verdict(True, 1.0, "exact", "said the answer verbatim")
 
     judged = ask_judge(question, answer, transcript, cfg)
     if judged is None:
-        # No model to consult and similarity already said "I cannot tell". Every automatic
-        # answer here is a guess: marking incorrect punishes answers that were probably right,
-        # and splitting the band by score is just a coin flip wearing a threshold. Ask instead.
+        # The model is the only grader now, so if it cannot be reached there is nothing to fall
+        # back to. Hand the card to the user rather than invent a verdict.
         return Verdict(
-            False, score, "unresolved", "could not be graded automatically", needs_human=True
+            False, 0.0, "unresolved", "grading model unavailable", needs_human=True
         )
-    return Verdict(judged, score, "judge", "semantic verdict")
+    return Verdict(judged, 1.0 if judged else 0.0, "judge", "semantic verdict")

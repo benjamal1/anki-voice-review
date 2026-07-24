@@ -188,13 +188,6 @@ class TestEverySettingRoundTrips:
         dialog.override.setValue(0.0)
         assert Config.from_mapping(dialog.values()).override_window_s == 0.0
 
-    def test_thresholds(self, qapp):
-        dialog = SettingsDialog(None, dict(STALE))
-        dialog.fuzzy_correct.setValue(0.5)
-        dialog.fuzzy_wrong.setValue(0.2)
-        cfg = Config.from_mapping(dialog.values())
-        assert (cfg.fuzzy_correct, cfg.fuzzy_wrong) == (0.5, 0.2)
-
     def test_say_rate(self, qapp):
         dialog = SettingsDialog(None, dict(STALE))
         dialog.say_rate.setText("230")
@@ -223,8 +216,6 @@ class TestRestoreDefaults:
         cfg = Config.from_mapping(dialog.values())
         defaults = Config()
         assert cfg.override_window_s == defaults.override_window_s
-        assert cfg.fuzzy_correct == defaults.fuzzy_correct
-        assert cfg.fuzzy_wrong == defaults.fuzzy_wrong
         assert cfg.flag_on_skip == 0
         assert cfg.terminator == defaults.terminator
 
@@ -237,9 +228,3 @@ class TestRestoreDefaults:
         assert dialog.values()["override_window_seconds"] == 0.0
 
 
-class TestValidation:
-    def test_an_invalid_threshold_pair_is_reported_not_saved(self, qapp):
-        dialog = SettingsDialog(None, dict(STALE))
-        dialog.fuzzy_correct.setValue(0.2)
-        dialog.fuzzy_wrong.setValue(0.8)
-        assert Config.from_mapping(dialog.values()).validate()

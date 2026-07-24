@@ -186,18 +186,6 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Grading", self.grading_mode)
 
-        self.fuzzy_correct = QDoubleSpinBox()
-        self.fuzzy_correct.setRange(0.0, 1.0)
-        self.fuzzy_correct.setSingleStep(0.05)
-        self.fuzzy_correct.setValue(float(config.get("fuzzy_correct", Config().fuzzy_correct)))
-        form.addRow("Correct at or above", self.fuzzy_correct)
-
-        self.fuzzy_wrong = QDoubleSpinBox()
-        self.fuzzy_wrong.setRange(0.0, 1.0)
-        self.fuzzy_wrong.setSingleStep(0.05)
-        self.fuzzy_wrong.setValue(float(config.get("fuzzy_wrong", Config().fuzzy_wrong)))
-        form.addRow("Incorrect below", self.fuzzy_wrong)
-
         self.flag_on_skip = QComboBox()
         self.flag_on_skip.addItem("Don't flag", 0)
         for name, value in FLAG_BY_NAME.items():
@@ -228,7 +216,7 @@ class SettingsDialog(QDialog):
 
         def sync_mode() -> None:
             automatic = self.grading_mode.currentData() == "auto"
-            for widget in (self.fuzzy_correct, self.fuzzy_wrong, self.override, self.ollama_model):
+            for widget in (self.override, self.ollama_model):
                 widget.setEnabled(automatic)
 
         self.grading_mode.currentIndexChanged.connect(lambda _: sync_mode())
@@ -278,8 +266,6 @@ class SettingsDialog(QDialog):
         self.override.setValue(defaults.override_window_s)
         self.headphones.setChecked(defaults.headphones)
         self.grading_mode.setCurrentIndex(0)
-        self.fuzzy_correct.setValue(defaults.fuzzy_correct)
-        self.fuzzy_wrong.setValue(defaults.fuzzy_wrong)
         self.flag_on_skip.setCurrentIndex(0)
         self.model_path.setText(str(defaults.whisper_model))
         self.ollama_model.setText(defaults.ollama_model)
@@ -296,8 +282,6 @@ class SettingsDialog(QDialog):
                 "grading_mode": self.grading_mode.currentData(),
                 "flag_on_skip": self.flag_on_skip.currentData(),
                 "headphones": self.headphones.isChecked(),
-                "fuzzy_correct": self.fuzzy_correct.value(),
-                "fuzzy_wrong": self.fuzzy_wrong.value(),
                 "whisper_model": self.model_path.text().strip(),
                 "ollama_model": self.ollama_model.text().strip(),
                 "say_voice": self.say_voice.text().strip(),

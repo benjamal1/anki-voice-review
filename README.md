@@ -142,76 +142,29 @@ Grading is deliberately lenient. A wrong "incorrect" makes you repeat a card you
 
 ## How grading works
 
-Two stages, cheapest first.
+Every spoken answer is judged by the local model (Ollama, `qwen2.5:3b`) for **meaning**, not
+string similarity. Say the answer any way you like; if it means the same thing, it's correct.
 
-1. **Text similarity.** Your words against the card's answer, taking the better of whole-answer
-   similarity and best-phrase-within-the-sentence. So "the capital is Paris" scores full marks
-   against a card that just says "Paris". Mathematical notation is expanded to how it is
-   spoken, so `2^K` matches "two to the power of K".
-2. **The local model**, only when similarity lands in the middle and cannot decide.
+The one shortcut: if what you said **is** the answer word-for-word (after ignoring case,
+punctuation, and digit-vs-word — "four" matches "4"), it's marked correct instantly with no
+model call. Everything else goes to the model, ~0.3s once it's warm.
 
-Most answers never reach stage 2.
+There is no fuzzy string matching. It was removed: spoken answers vary too much for a
+similarity threshold, and every threshold was a guess that mis-graded correct-but-reworded
+answers.
 
-If nothing can decide — the model is unavailable and similarity is inconclusive — the answer
-is read back and **you** are asked to grade it. It is never guessed. An earlier version split
-the middle band by score in that situation; that was a coin flip wearing a threshold, and it
-produced verdicts that looked authoritative and were not.
+If the model is unreachable, the answer is handed to you to grade rather than guessed.
 
-### Undo
+**Latency:** ~0.3s per judged card once warm, and the model is warmed in the background at
+session start. That is about the floor — the verdict is a single word, so latency is fixed
+round-trip overhead, not model compute, and a smaller model is no faster (and less accurate).
+`llama.cpp` is not faster because Ollama already runs on it.
 
-Grading moves straight to the next card, so **undo** is how you correct a verdict you
-disagree with. It says "undone" and waits. Nothing is read out — you have just heard the card
-and made up your mind, so the only thing left is to say **again**, **hard**, **good** or
-**easy**, and that is applied to the card you were correcting.
+**Manual mode** skips the model entirely — you grade every card yourself.
 
-You stay on the card in front of you, which has not been answered yet. Anki's undo reverts the
-scheduling but does not move the reviewer backwards, so the correction names the card
-explicitly rather than grading whatever is on screen.
+Cloze cards grade against the deleted text only. Card styling, scheduler widgets, and media
+references are stripped before anything is spoken or graded.
 
-### Headphones mode
-
-On speakers, the add-on has to stop listening while it talks, or it transcribes its own voice
-as your answer. That means waiting for the card to finish being read before you can say
-anything.
-
-With headphones nothing it says reaches the microphone, so **Settings → Headphones** lets you
-interrupt: start answering as soon as you know it, or say *skip* the moment you recognise a
-card you cannot do. Whatever you say cuts the speech off immediately.
-
-### Changing the words
-
-Every command accepts several words, and you can change them in
-**Tools → Add-ons → Voice Review → Config** under `command_words`:
-
-```json
-"command_words": { "skip": ["skip", "bury", "next"], "good": ["good", "yes"] }
-```
-
-Actions you do not list keep their defaults.
-
-### Flagging cards you skip
-
-Set **Flag on skip** to a colour and saying *skip* or *bury* will flag the card as well as
-setting it aside. Useful for marking cards that do not work by voice — image cards, anything
-with a diagram, or a card whose wording needs fixing — and finding them later with a browser
-search like `flag:1`.
-
-It announces the colour so you know it registered.
-
-### Manual mode
-
-Set **Grading** to Manual. The card is read out, you answer, the answer is read back, and it
-waits for you to say **good** or **again** — indefinitely, with no default and no timer. No
-language model is involved at any point.
-
-**Cloze cards** grade against the deleted text only, not the whole sentence — including
-deletions inside MathJax, where Anki marks up nothing and the deletion has to be recovered by
-comparing the two sides of the card.
-
-Card styling, scheduling widgets like the FSRS Helper's status line, and media references are
-stripped before anything is read aloud or graded.
-
----
 
 ## Troubleshooting
 
