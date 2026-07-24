@@ -27,6 +27,7 @@ ollama pull qwen2.5:3b        # optional, only for ambiguous answers
 | `announce_verdict` | Speak "correct"/"incorrect". Turn off to save about a second per card; the verdict is still on screen. |
 | `whisper_threads` | Threads for transcription. 8 suits an M-series chip; the default of 4 leaves most of it idle. |
 | `whisper_length_ms` | How much trailing audio is transcribed per utterance. Lower is faster, but clips very long answers. |
+| `whisper_step_ms` | Transcription cadence. `500` = live captions: whisper re-transcribes every 500 ms and emits partial text as you speak, so the end-of-answer word lands ~1-2 s sooner. `0` = wait for a pause: transcribe only when you stop talking (steadier, but you feel the end-of-speech pause). Lower step = more responsive, more CPU. |
 | `vad_threshold` | Lower is more eager to treat quiet audio as speech. Raise it if background noise triggers it; lower it if short words like "skip" are missed. |
 | `ollama_keep_alive` | How long the judge model stays loaded between cards. |
 | `ollama_url` / `ollama_model` / `judge_timeout_seconds` | The local grader. If Ollama is not running, ambiguous answers fall back to the fuzzy verdict and reviewing continues. |

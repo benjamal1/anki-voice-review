@@ -155,6 +155,12 @@ class Config:
     # How much trailing audio is transcribed per utterance. Less audio = less work = faster.
     # Long enough for a sentence-length answer, short enough not to re-chew silence.
     whisper_length_ms: int = field(default_factory=lambda: int(_env_float("AVR_WHISPER_LENGTH", 5000)))
+    # Transcription cadence. 0 = VAD mode: whisper waits until you STOP talking, then transcribes
+    # the whole utterance — accurate but you pay an end-of-speech pause before anything appears.
+    # >0 = streaming/live-caption mode: it re-transcribes the rolling window every N ms and emits
+    # partials as you speak, so the terminator lands ~1-2s sooner. The redundant partials are
+    # collapsed by the session's accumulate/dedup. 500 is a good live default.
+    whisper_step_ms: int = field(default_factory=lambda: int(_env_float("AVR_WHISPER_STEP", 500)))
     # Voice-activity threshold. Lower is more eager to treat quiet audio as speech, which
     # matters for short single words like "skip".
     vad_threshold: float = field(default_factory=lambda: _env_float("AVR_VAD_THRESHOLD", 0.45))
@@ -250,6 +256,7 @@ class Config:
             grading_mode=str(data.get("grading_mode") or "auto").lower(),
             whisper_threads=int(data.get("whisper_threads") or 8),
             whisper_length_ms=int(data.get("whisper_length_ms") or 5000),
+            whisper_step_ms=int(data.get("whisper_step_ms", 500)),
             vad_threshold=float(data.get("vad_threshold") or 0.45),
             ollama_keep_alive=str(data.get("ollama_keep_alive") or "30m"),
             announce_verdict=bool(data.get("announce_verdict", True)),
@@ -270,6 +277,8 @@ class Config:
             problems.append("terminator keyword must not be empty")
         if self.override_window_s < 0:
             problems.append("override window must not be negative")
+        if self.whisper_step_ms < 0:
+            problems.append("whisper step must be 0 (wait-for-pause) or a positive millisecond value")
         if not 0 <= self.flag_on_skip <= 7:
             problems.append(f"flag must be 0-7, got {self.flag_on_skip}")
         for action, spoken in self.command_words.items():

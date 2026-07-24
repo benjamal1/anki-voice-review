@@ -41,7 +41,10 @@ def write(event: str, detail: str = "") -> None:
         return
     try:
         with open(_LOG_PATH, "a") as fh:
-            stamp = time.strftime("%H:%M:%S")
+            now = time.time()
+            # Millisecond resolution: the whole point of the trace is measuring per-card latency
+            # (whisper emission vs grade), and second stamps hide the sub-second gaps that matter.
+            stamp = time.strftime("%H:%M:%S", time.localtime(now)) + f".{int((now % 1) * 1000):03d}"
             fh.write(f"{stamp}  {event}{('  ' + detail) if detail else ''}\n")
     except OSError:
         pass

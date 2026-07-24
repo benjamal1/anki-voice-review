@@ -116,6 +116,7 @@ class Transcriber:
         threads: int = 8,
         length_ms: int = 5000,
         vad_threshold: float = 0.45,
+        step_ms: int = 500,
     ) -> None:
         self._binary = binary
         self._resolved_binary = binary
@@ -124,6 +125,7 @@ class Transcriber:
         self._threads = threads
         self._length_ms = length_ms
         self._vad_threshold = vad_threshold
+        self._step_ms = step_ms
         self._process: subprocess.Popen[str] | None = None
         self._queue: queue.Queue[str] = queue.Queue()
         self._reader: threading.Thread | None = None
@@ -151,10 +153,12 @@ class Transcriber:
                 self._resolved_binary,
                 "-m", str(self._model),
                 "-l", self._language,
-                # --step 0 switches from a fixed sliding window to VAD-driven emission: it
-                # transcribes when you stop talking rather than every N milliseconds. Lower
-                # latency per utterance and far less redundant re-transcription.
-                "--step", "0",
+                # --step controls WHEN whisper emits. 0 = VAD: transcribe only when you stop
+                # talking (accurate, but you wait out the end-of-speech pause). >0 = streaming:
+                # re-transcribe the rolling window every N ms and emit partials live, like
+                # captions, so the terminator lands sooner. The redundant partials streaming
+                # produces are collapsed by the session's accumulate/dedup.
+                "--step", str(self._step_ms),
                 "--length", str(self._length_ms),
                 "-vth", str(self._vad_threshold),
                 "-t", str(self._threads),

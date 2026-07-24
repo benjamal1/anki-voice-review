@@ -214,6 +214,21 @@ class TestReadAnswer:
         assert not Config(read_answer="never").validate()
 
 
+class TestWhisperStep:
+    def test_defaults_to_live_streaming(self):
+        assert Config().whisper_step_ms == 500
+
+    def test_from_mapping_preserves_zero_wait_mode(self):
+        # 0 is a real choice (wait-for-pause), not "unset" — an `or` default would eat it.
+        assert Config.from_mapping({"whisper_step_ms": 0}).whisper_step_ms == 0
+
+    def test_from_mapping_defaults_when_absent(self):
+        assert Config.from_mapping({}).whisper_step_ms == 500
+
+    def test_validate_rejects_negative(self):
+        assert Config(whisper_step_ms=-1).validate()
+
+
 class TestConfigMigration:
     """Anki keeps a user's add-on config across updates, so a new default never reaches anyone
     who has opened the settings dialog — their stored copy of the OLD default wins silently."""

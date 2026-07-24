@@ -102,6 +102,7 @@ def cmd_listen(cfg: Config, args: argparse.Namespace) -> int:
             threads=cfg.whisper_threads,
             length_ms=cfg.whisper_length_ms,
             vad_threshold=cfg.vad_threshold,
+            step_ms=cfg.whisper_step_ms,
         )
     speaker = Speaker(cfg.say_voice, cfg.say_rate)
     try:
@@ -145,6 +146,7 @@ def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
             threads=cfg.whisper_threads,
             length_ms=cfg.whisper_length_ms,
             vad_threshold=cfg.vad_threshold,
+            step_ms=cfg.whisper_step_ms,
         )
     speaker = Speaker(cfg.say_voice, cfg.say_rate)
     anki = AnkiConnect(cfg.anki_url)

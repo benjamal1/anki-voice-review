@@ -191,7 +191,8 @@ in order:
 
 | Change | Effect |
 |---|---|
-| `whisper_threads` (default 8) | Biggest single win. The whisper default of 4 leaves most of an M-series chip idle. |
+| `whisper_step_ms` (default 500) | **Live captions.** whisper re-transcribes as you speak instead of waiting for you to stop, so the end-of-answer word is recognised ~1-2s sooner — the biggest cut to the wait *after* you finish talking. Set to 0 for the old wait-for-a-pause behaviour if live mode mis-hears commands. |
+| `whisper_threads` (default 8) | Biggest single win on the transcription itself. The whisper default of 4 leaves most of an M-series chip idle. |
 | `announce_verdict: false` | Saves about a second per card. The verdict is on screen either way. |
 | `read_answer: never` | Skips reading the answer aloud entirely — it is still shown on screen. `incorrect` (default) reads it only when you were wrong; `always` reads every card. Reading holds the advance until it finishes. |
 | `whisper_length_ms` (default 5000) | Less trailing audio transcribed per utterance. Lower is faster; too low clips long answers. |

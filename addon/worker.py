@@ -76,6 +76,7 @@ class VoiceWorker(threading.Thread):
             threads=cfg.whisper_threads,
             length_ms=cfg.whisper_length_ms,
             vad_threshold=cfg.vad_threshold,
+            step_ms=cfg.whisper_step_ms,
         )
         self.tts = Speaker(cfg.say_voice, cfg.say_rate)
 
@@ -273,9 +274,15 @@ class VoiceWorker(threading.Thread):
                     before = self.session.graded
                     if self.session.phase.name == "LISTENING":
                         self.on_phase(PHASE_GRADING, "")
+                    t0 = time.monotonic()
                     produced = self.session.on_line(line)
+                    # on_line is cheap except when it grades; timing it isolates the LLM cost so
+                    # the trace shows exactly how much of the wait is grading vs whisper emission.
+                    dt_ms = (time.monotonic() - t0) * 1000
                     tracelog.write(
-                        "intents", ", ".join(type(i).__name__ for i in produced) or "(none)"
+                        "intents",
+                        (", ".join(type(i).__name__ for i in produced) or "(none)")
+                        + f"  decide={dt_ms:.0f}ms",
                     )
                     self._execute(produced)
                     if self.session.phase.name == "AWAITING_EASE":
