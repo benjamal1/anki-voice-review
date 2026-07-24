@@ -204,20 +204,6 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Flag on skip", self.flag_on_skip)
 
-        self.transcription = QComboBox()
-        self.transcription.addItem("Live captions — faster, transcribes as you speak", 500)
-        self.transcription.addItem("Wait for a pause — steadier, transcribes when you stop", 0)
-        wanted_step = int(config.get("whisper_step_ms", 500))
-        # Any positive step is a live mode; map it to the live entry, 0 to wait-for-pause.
-        self.transcription.setCurrentIndex(0 if wanted_step > 0 else 1)
-        self.transcription.setToolTip(
-            "Live captions transcribe the rolling audio every half-second so the end-of-answer\n"
-            "word is recognised sooner — the main lever on how long you wait after speaking.\n"
-            "Wait-for-a-pause only transcribes once you stop talking: steadier, but you feel the\n"
-            "pause. Switch to it if live mode mis-hears commands mid-sentence."
-        )
-        form.addRow("Transcription", self.transcription)
-
         self.model_path = QLineEdit(str(config.get("whisper_model", "")))
         form.addRow("Whisper model", self.model_path)
 
@@ -284,7 +270,6 @@ class SettingsDialog(QDialog):
         self.grading_mode.setCurrentIndex(0)
         self.read_answer.setCurrentIndex(max(0, self.read_answer.findData(defaults.read_answer)))
         self.flag_on_skip.setCurrentIndex(0)
-        self.transcription.setCurrentIndex(0 if defaults.whisper_step_ms > 0 else 1)
         self.model_path.setText(str(defaults.whisper_model))
         self.ollama_model.setText(defaults.ollama_model)
         self.say_voice.setText("")
@@ -300,7 +285,6 @@ class SettingsDialog(QDialog):
                 "grading_mode": self.grading_mode.currentData(),
                 "read_answer": self.read_answer.currentData(),
                 "flag_on_skip": self.flag_on_skip.currentData(),
-                "whisper_step_ms": self.transcription.currentData(),
                 "whisper_model": self.model_path.text().strip(),
                 "ollama_model": self.ollama_model.text().strip(),
                 "say_voice": self.say_voice.text().strip(),
