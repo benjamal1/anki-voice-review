@@ -15,7 +15,7 @@ from enum import Enum, auto
 from typing import Union
 
 from .cards import Card, normalize
-from .config import EASE_AGAIN, EASE_BY_NAME, EASE_GOOD, Config
+from .config import EASE_AGAIN, EASE_BY_NAME, EASE_GOOD, FLAG_NAMES, Config
 from .grade import Verdict
 
 # "bury" is a synonym for "skip": both set the card aside without grading and without ever
@@ -56,6 +56,13 @@ class NextCard:
 
 
 @dataclass(frozen=True)
+class FlagCard:
+    """Mark the card with one of Anki's coloured flags, so it can be found again later."""
+
+    flag: int
+
+
+@dataclass(frozen=True)
 class BuryCard:
     """Set the current card aside for this session without grading it.
 
@@ -77,7 +84,9 @@ class Quit:
 
 # typing.Union, not `A | B`: this is a runtime expression, and Anki 25.02.5 bundles Python 3.9
 # where `|` on classes raises TypeError. The add-on imports this module inside Anki.
-Intent = Union[Speak, ShowAnswer, AnswerCard, NextCard, BuryCard, StartOverrideTimer, Quit]
+Intent = Union[
+    Speak, ShowAnswer, AnswerCard, NextCard, FlagCard, BuryCard, StartOverrideTimer, Quit
+]
 
 
 def match_command(line: str) -> str | None:
@@ -186,8 +195,7 @@ class Session:
             self.phase = Phase.FINISHED
             return [Speak("Goodbye"), Quit()]
         if command in ("skip", "bury"):
-            self.phase = Phase.LISTENING
-            return [Speak("Skipping"), BuryCard(), NextCard()]
+            return self._set_aside()
         if command == "repeat":
             # Re-read the answer, not the question — the answer is already on screen.
             return [Speak(self.card.answer if self.card else "")]
@@ -210,12 +218,7 @@ class Session:
             return [Speak("Goodbye"), Quit()]
 
         if command in ("skip", "bury"):
-            self.phase = Phase.LISTENING
-            # No ShowAnswer anywhere on this path: an image card or an unreadable card should
-            # be set aside without the answer ever being revealed or read out.
-            # Bury first — without it the loop "advances" to the card already showing and
-            # reads it again, which is what skip used to do.
-            return [Speak("Skipping"), BuryCard(), NextCard()]
+            return self._set_aside()
 
         if command == "repeat":
             # Restart the answer too — whatever was captured was against a card the user has
@@ -231,6 +234,28 @@ class Session:
         if ease >= EASE_GOOD:
             self.correct += 1
         return [ShowAnswer(), AnswerCard(ease), NextCard()]
+
+    def _set_aside(self) -> list[Intent]:
+        """Skip/bury: put the card away without grading it and without revealing the answer.
+
+        No ShowAnswer anywhere on this path — an image card, or anything that cannot be read
+        aloud, should be set aside with the answer never shown or spoken.
+
+        Flagging happens *before* burying, because once the card is buried the reviewer has
+        moved on and there is no longer a current card to flag.
+        """
+        self.phase = Phase.LISTENING
+        flag = self.cfg.flag_on_skip
+        intents: list[Intent] = []
+        if flag:
+            colour = FLAG_NAMES.get(flag, str(flag))
+            intents.append(Speak(f"Flagged {colour}"))
+            intents.append(FlagCard(flag))
+        else:
+            intents.append(Speak("Skipping"))
+        intents.append(BuryCard())
+        intents.append(NextCard())
+        return intents
 
     def _ask_user(self, preamble: str) -> list[Intent]:
         """Show and read the answer, then wait for the user to grade it themselves.

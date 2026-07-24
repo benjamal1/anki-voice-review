@@ -16,6 +16,20 @@ EASE_HARD = 2
 EASE_GOOD = 3
 EASE_EASY = 4
 
+# Anki's card flags. 0 means no flag; a card can carry only one.
+FLAG_NONE = 0
+FLAG_BY_NAME = {
+    "none": 0,
+    "red": 1,
+    "orange": 2,
+    "green": 3,
+    "blue": 4,
+    "pink": 5,
+    "turquoise": 6,
+    "purple": 7,
+}
+FLAG_NAMES = {value: name for name, value in FLAG_BY_NAME.items()}
+
 EASE_BY_NAME = {
     "again": EASE_AGAIN,
     "hard": EASE_HARD,
@@ -84,6 +98,11 @@ class Config:
     # With no model available the honest move is to ask the person, not to invent a verdict.
     grading_mode: str = "auto"
 
+    # Flag applied to a card when you say skip or bury, so it can be found again later.
+    # 0 = do not flag. Red (1) pairs with the anki-obsidian pipeline, which picks up
+    # red-flagged cards for review.
+    flag_on_skip: int = field(default_factory=lambda: int(_env_float("AVR_FLAG_ON_SKIP", 0)))
+
     @property
     def manual(self) -> bool:
         return self.grading_mode == "manual"
@@ -115,6 +134,7 @@ class Config:
             terminator=str(pick("terminator", defaults.terminator)),
             override_window_s=float(pick("override_window_seconds", defaults.override_window_s)),
             grading_mode=str(data.get("grading_mode") or "auto").lower(),
+            flag_on_skip=int(data.get("flag_on_skip") or 0),
         )
 
     def validate(self) -> list[str]:
@@ -129,6 +149,8 @@ class Config:
             problems.append("terminator keyword must not be empty")
         if self.override_window_s < 0:
             problems.append("override window must not be negative")
+        if not 0 <= self.flag_on_skip <= 7:
+            problems.append(f"flag must be 0-7, got {self.flag_on_skip}")
         if self.grading_mode not in ("auto", "manual"):
             problems.append(f"grading mode must be 'auto' or 'manual', got {self.grading_mode!r}")
         return problems

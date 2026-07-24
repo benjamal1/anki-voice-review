@@ -8,6 +8,7 @@ from avr.grade import Verdict
 from avr.session import (
     AnswerCard,
     BuryCard,
+    FlagCard,
     NextCard,
     Phase,
     Quit,
@@ -420,3 +421,58 @@ class TestUnresolvedAsksTheUser:
         s.on_line("something ambiguous done")
         assert of(s.on_line("good"), AnswerCard)[0].ease == EASE_GOOD
         assert s.graded == 1 and s.correct == 1
+
+
+class TestFlagOnSkip:
+    """Optional: skipping can also flag the card, so bad cards can be found again later.
+    Red (1) is what the anki-obsidian pipeline watches for."""
+
+    def flagging(self, flag=1):
+        s = Session(cfg=Config(flag_on_skip=flag), grade_fn=always(True))
+        s.begin_card(CARD)
+        return s
+
+    def test_off_by_default(self):
+        s = session()
+        assert not of(s.on_line("skip"), FlagCard)
+
+    def test_flags_when_configured(self):
+        s = self.flagging(1)
+        assert of(s.on_line("skip"), FlagCard)[0].flag == 1
+
+    def test_bury_flags_too(self):
+        s = self.flagging(1)
+        assert of(s.on_line("bury"), FlagCard)[0].flag == 1
+
+    def test_any_colour_works(self):
+        s = self.flagging(4)
+        assert of(s.on_line("skip"), FlagCard)[0].flag == 4
+
+    def test_the_flag_is_applied_before_the_card_is_buried(self):
+        # Once buried the reviewer has moved on and there is no current card left to flag.
+        intents = self.flagging(1).on_line("skip")
+        kinds = [type(i).__name__ for i in intents]
+        assert kinds.index("FlagCard") < kinds.index("BuryCard")
+
+    def test_it_says_which_colour(self):
+        spoken = [i.text for i in of(self.flagging(1).on_line("skip"), Speak)]
+        assert any("red" in t.lower() for t in spoken)
+
+    def test_flagging_still_never_reveals_the_answer(self):
+        intents = self.flagging(1).on_line("skip")
+        assert not of(intents, ShowAnswer)
+        assert CARD.answer not in [i.text for i in of(intents, Speak)]
+
+    def test_it_still_does_not_grade(self):
+        s = self.flagging(1)
+        s.on_line("skip")
+        assert s.graded == 0
+
+    def test_flagging_works_while_awaiting_a_manual_grade(self):
+        s = Session(cfg=Config(grading_mode="manual", flag_on_skip=2), grade_fn=always(True))
+        s.begin_card(CARD)
+        s.on_line("done")
+        assert of(s.on_line("skip"), FlagCard)[0].flag == 2
+
+    def test_an_out_of_range_flag_is_reported(self):
+        assert Config(flag_on_skip=9).validate()

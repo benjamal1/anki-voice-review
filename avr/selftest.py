@@ -37,6 +37,7 @@ class Case:
     note: str = ""
     manual: bool = False
     forbid_show_answer: bool = False
+    flag: int = 0
 
 
 CASES = [
@@ -218,7 +219,11 @@ def run(cfg: Config, keep: bool = False) -> int:
         for case in CASES:
             # Each case may need its own grading mode, so build a runner per case rather than
             # mutating a frozen Config.
-            case_cfg = replace(cfg, grading_mode="manual") if case.manual else cfg
+            case_cfg = cfg
+            if case.manual:
+                case_cfg = replace(case_cfg, grading_mode="manual")
+            if case.flag:
+                case_cfg = replace(case_cfg, flag_on_skip=case.flag)
             runner = Runner(case_cfg, anki, stt, speaker)
             results.append(_run_case(runner, anki, stt, speaker, case))
     finally:

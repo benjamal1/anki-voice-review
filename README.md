@@ -104,7 +104,7 @@ the grade by voice before it is submitted.
 | just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |
 | **again** / **hard** / **good** / **easy** | set the grade yourself — during the override window, or instead of answering |
 | **repeat** | read the card again, discard what you had said |
-| **skip** or **bury** | set the card aside and move on. The answer is never shown or read — for image cards and anything that cannot be read aloud |
+| **skip** or **bury** | set the card aside and move on. The answer is never shown or read — for image cards and anything that cannot be read aloud. Can also flag the card, see below |
 | **quit** | end the session |
 
 **Stop** ends the session immediately, cutting off mid-sentence if it is talking.
@@ -128,6 +128,7 @@ mis-hearings, not mis-grading. If the transcript is right but the grade is wrong
 | Grading | Automatic | **Automatic** grades for you. **Manual** reads the answer back and waits for you to say good or again — no model needed, no time limit |
 | Correct at or above | 0.62 | similarity needed to be marked correct outright. Lower = more lenient |
 | Incorrect below | 0.30 | similarity below which it is marked wrong outright |
+| Flag on skip | off | also flag the card when you skip or bury it, so you can find it later with `flag:1` in the browser |
 | Whisper model | `~/whisper-models/ggml-base.en.bin` | swap in `small.en` for accuracy over speed |
 | Judge model | `qwen2.5:3b` | any model you have pulled in Ollama |
 | Voice / Speech rate | system default / 190 | any voice from System Settings → Spoken Content |
@@ -153,6 +154,15 @@ If nothing can decide — the model is unavailable and similarity is inconclusiv
 is read back and **you** are asked to grade it. It is never guessed. An earlier version split
 the middle band by score in that situation; that was a coin flip wearing a threshold, and it
 produced verdicts that looked authoritative and were not.
+
+### Flagging cards you skip
+
+Set **Flag on skip** to a colour and saying *skip* or *bury* will flag the card as well as
+setting it aside. Useful for marking cards that do not work by voice — image cards, anything
+with a diagram, or a card whose wording needs fixing — and finding them later with a browser
+search like `flag:1`.
+
+It announces the colour so you know it registered.
 
 ### Manual mode
 

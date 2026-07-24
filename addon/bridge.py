@@ -175,6 +175,37 @@ class AnkiBridge:
 
         return bool(run_on_main(bury))
 
+    def set_flag(self, flag: int) -> bool:
+        """Apply one of Anki's coloured flags to the current card.
+
+        Must be called before burying — once the card is buried the reviewer has moved on and
+        there is no current card left to flag.
+
+        The exact API has moved between Anki versions, so try the reviewer's own method first
+        (what Ctrl+1..7 calls) and fall back to the collection.
+        """
+        if not 0 <= flag <= 7:
+            raise ValueError(f"flag must be 0-7, got {flag}")
+
+        def apply() -> bool:
+            if not self._review_active():
+                return False
+            reviewer = self._reviewer()
+            card = reviewer.card
+            method = getattr(reviewer, "set_flag_on_current_card", None)
+            if callable(method):
+                method(flag)
+                return True
+            setter = getattr(mw.col, "set_user_flag_for_cards", None)
+            if callable(setter):
+                setter(flag, [card.id])
+                return True
+            card.set_user_flag(flag)  # oldest path
+            mw.col.update_card(card)
+            return True
+
+        return bool(run_on_main(apply))
+
     def reviewer_state(self) -> Optional[str]:
         """'question', 'answer', or None when not reviewing."""
 

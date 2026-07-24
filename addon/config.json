@@ -2,6 +2,7 @@
   "terminator": "done",
   "override_window_seconds": 2.5,
   "grading_mode": "auto",
+  "flag_on_skip": 0,
   "fuzzy_correct": 0.62,
   "fuzzy_wrong": 0.3,
   "whisper_binary": "whisper-stream",

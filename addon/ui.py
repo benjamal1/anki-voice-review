@@ -35,7 +35,7 @@ from aqt.qt import (
     pyqtSignal,
 )
 
-from .avr.config import Config
+from .avr.config import FLAG_BY_NAME, Config
 from .avr.diagnostics import FAIL, OK, WARN, blocking_problems, run_all
 from .bridge import AnkiBridge
 from .worker import (
@@ -186,6 +186,21 @@ class SettingsDialog(QDialog):
         self.fuzzy_wrong.setValue(float(config.get("fuzzy_wrong", Config().fuzzy_wrong)))
         form.addRow("Incorrect below", self.fuzzy_wrong)
 
+        self.flag_on_skip = QComboBox()
+        self.flag_on_skip.addItem("Don't flag", 0)
+        for name, value in FLAG_BY_NAME.items():
+            if value:
+                self.flag_on_skip.addItem(name.capitalize(), value)
+        wanted = int(config.get("flag_on_skip") or 0)
+        self.flag_on_skip.setCurrentIndex(
+            max(0, self.flag_on_skip.findData(wanted))
+        )
+        self.flag_on_skip.setToolTip(
+            "When you say skip or bury, also flag the card so you can find it later\n"
+            "with a search like flag:1 in the browser."
+        )
+        form.addRow("Flag on skip", self.flag_on_skip)
+
         self.model_path = QLineEdit(str(config.get("whisper_model", "")))
         form.addRow("Whisper model", self.model_path)
 
@@ -245,6 +260,7 @@ class SettingsDialog(QDialog):
                 "terminator": self.terminator.text().strip() or "done",
                 "override_window_seconds": self.override.value(),
                 "grading_mode": self.grading_mode.currentData(),
+                "flag_on_skip": self.flag_on_skip.currentData(),
                 "fuzzy_correct": self.fuzzy_correct.value(),
                 "fuzzy_wrong": self.fuzzy_wrong.value(),
                 "whisper_model": self.model_path.text().strip(),

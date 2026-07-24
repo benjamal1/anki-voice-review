@@ -17,6 +17,7 @@ from .avr.grade import grade
 from .avr.session import (
     AnswerCard,
     BuryCard,
+    FlagCard,
     NextCard,
     Quit,
     Session,
@@ -115,6 +116,10 @@ class VoiceWorker(threading.Thread):
 
             elif isinstance(intent, StartOverrideTimer):
                 self._override_deadline = time.monotonic() + intent.seconds
+
+            elif isinstance(intent, FlagCard):
+                if not self.bridge.set_flag(intent.flag):
+                    self.on_error("Could not flag this card.")
 
             elif isinstance(intent, BuryCard):
                 if not self.bridge.bury_current():

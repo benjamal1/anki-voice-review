@@ -17,6 +17,7 @@ from .grade import grade
 from .session import (
     AnswerCard,
     BuryCard,
+    FlagCard,
     Intent,
     NextCard,
     Quit,
@@ -75,6 +76,11 @@ class Runner:
 
             elif isinstance(intent, StartOverrideTimer):
                 self._override_deadline = time.monotonic() + intent.seconds
+
+            elif isinstance(intent, FlagCard):
+                # AnkiConnect has no flag action either, same as bury. The add-on does this
+                # through the collection; over HTTP it is simply not available.
+                log.warning("flagging is not available over AnkiConnect; skipped")
 
             elif isinstance(intent, BuryCard):
                 # AnkiConnect exposes no bury action (checked: none of its 121 actions), so
