@@ -130,18 +130,19 @@ class VoiceWorker(threading.Thread):
         tracelog.write("intent", type(intent).__name__)
         if isinstance(intent, Speak):
             self.on_phase(PHASE_SPEAKING, intent.text)
-            if self.cfg.headphones:
-                interrupted = self._speak_interruptibly(intent.text)
-                if interrupted:
-                    # The user talked over it. Their words are already queued, so stop
-                    # running the rest of this batch and let the loop handle them.
+            if self.cfg.barge_in and self.cfg.headphones:
+                # Listen through the speech so the user can interrupt it.
+                if self._speak_interruptibly(intent.text):
+                    # They talked over it; their words are queued. Stop this batch and let the
+                    # loop pick them up.
                     return False
             else:
-                # On speakers the mic hears the TTS. Speak blocks, then the loop drains the
-                # backlog before listening (see _spoke) — the model is speak, then listen,
-                # never listen-through-our-own-voice.
+                # Plain speak-then-listen. On headphones nothing echoes, so we are done. On
+                # speakers the mic heard the TTS, so flag the loop to drain that backlog before
+                # it listens.
                 self.tts.speak(intent.text)
-                self._spoke = True
+                if not self.cfg.headphones:
+                    self._spoke = True
             if self.session.phase.name == "LISTENING":
                 self.on_phase(PHASE_LISTENING, "")
 
@@ -304,8 +305,11 @@ class VoiceWorker(threading.Thread):
                     line = self.stt.get(timeout=POLL_S)
 
                 if line:
-                    if is_echo(line, self.tts.recent_spoken(), self.cfg.command_words):
-                        # The machine hearing itself, not the user.
+                    if not self.cfg.headphones and is_echo(
+                        line, self.tts.recent_spoken(), self.cfg.command_words
+                    ):
+                        # Speakers only: the machine hearing itself. On headphones this cannot
+                        # happen, so the filter is skipped and never risks eating a real reply.
                         tracelog.write("echo-dropped", repr(line))
                         continue
                     # Report what it was understood AS, not just what was heard. "It shows

@@ -291,6 +291,19 @@ class TestConfigMigration:
         migrated, _ = migrate_config(stale)
         assert migrated["grading_mode"] == "manual"
 
+    def test_headphones_default_is_brought_forward(self):
+        migrated, changes = migrate_config(self.stale())
+        assert migrated["headphones"] is True
+        assert changes
+
+    def test_a_deliberate_speakers_choice_would_survive_a_future_default_flip(self):
+        # If someone had actually turned headphones ON, that stays; the migration only moves a
+        # value that still equals the OLD default.
+        stale = self.stale()
+        stale["headphones"] = True
+        migrated, _ = migrate_config(stale)
+        assert migrated["headphones"] is True
+
     def test_migrating_twice_changes_nothing_the_second_time(self):
         once, _ = migrate_config(self.stale())
         twice, changes = migrate_config(once)

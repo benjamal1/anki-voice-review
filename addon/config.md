@@ -16,7 +16,8 @@ ollama pull qwen2.5:3b        # optional, only for ambiguous answers
 |---|---|
 | `terminator` | The word that ends your answer and triggers grading. |
 | `override_window_seconds` | 0 advances to the next card immediately after grading; say **undo** to take back the last grade. Set above 0 to pause and wait instead. |
-| `headphones` | With headphones on, you can talk over the card being read — say your answer or *skip* the moment you know. Leave off when using speakers, or it will transcribe its own voice. |
+| `headphones` | ON by default and recommended. With headphones the mic never hears the computer, so it cannot transcribe the card back over your answer. Turn off only if you review on speakers. |
+| `barge_in` | Keep listening while a card is read so you can talk over it. Needs headphones. Off by default — enable once the basics feel solid. |
 | `command_words` | The words for each action. Every action takes a list, so add your own: `{"skip": ["skip", "bury", "next"]}`. |
 | `flag_on_skip` | 0-7. Also flag the card when you skip it. 1 is red. |
 | `grading_mode` | `auto` grades for you. `manual` reads the answer back and waits for you to say good or again — no model needed. |
