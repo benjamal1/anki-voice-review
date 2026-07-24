@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from .anki import AnkiConnect, AnkiError, NoCardShowing
 from .config import Config
 from .grade import grade
-from .tts import is_echo
 from .session import (
     AnswerCard,
     BuryCard,
@@ -185,8 +184,7 @@ class Runner:
                 line = self.stt.get(timeout=POLL_S)
 
                 if line:
-                    if is_echo(line, self.tts.recent_spoken(), self.cfg.command_words):
-                        continue
+                    self.tts.interrupt()  # user is speaking; stop talking over them
                     log.debug("heard: %s", line)
                     self._execute(self.session.on_line(line))
                     continue

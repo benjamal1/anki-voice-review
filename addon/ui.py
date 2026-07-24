@@ -155,15 +155,6 @@ class SettingsDialog(QDialog):
         self.terminator.setToolTip("The word that ends your answer and triggers grading.")
         form.addRow("End-of-answer word", self.terminator)
 
-        self.headphones = QCheckBox("Headphones — let me talk over it")
-        self.headphones.setChecked(bool(config.get("headphones", False)))
-        self.headphones.setToolTip(
-            "With headphones nothing the computer says reaches the microphone, so you can\n"
-            "interrupt it: say your answer, or 'skip', the moment you know — no waiting for\n"
-            "the card to finish being read."
-        )
-        form.addRow("", self.headphones)
-
         self.override = QDoubleSpinBox()
         self.override.setRange(0.0, 15.0)
         self.override.setSingleStep(0.5)
@@ -264,7 +255,6 @@ class SettingsDialog(QDialog):
         defaults = Config()
         self.terminator.setText(defaults.terminator)
         self.override.setValue(defaults.override_window_s)
-        self.headphones.setChecked(defaults.headphones)
         self.grading_mode.setCurrentIndex(0)
         self.flag_on_skip.setCurrentIndex(0)
         self.model_path.setText(str(defaults.whisper_model))
@@ -281,7 +271,6 @@ class SettingsDialog(QDialog):
                 "override_window_seconds": self.override.value(),
                 "grading_mode": self.grading_mode.currentData(),
                 "flag_on_skip": self.flag_on_skip.currentData(),
-                "headphones": self.headphones.isChecked(),
                 "whisper_model": self.model_path.text().strip(),
                 "ollama_model": self.ollama_model.text().strip(),
                 "say_voice": self.say_voice.text().strip(),
@@ -304,6 +293,12 @@ class VoiceReviewDialog(QDialog):
         super().__init__(parent or mw)
         self.setWindowTitle("Voice Review")
         self.setMinimumWidth(520)
+        # Float above Anki so the review status stays visible while Anki has focus. A plain
+        # Window (not Dialog) with StaysOnTop keeps it on top without stealing key focus from
+        # the reviewer underneath.
+        self.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.worker: Optional[VoiceWorker] = None
         self.bridge = AnkiBridge()
 
@@ -481,8 +476,6 @@ class VoiceReviewDialog(QDialog):
         )
         mode = "Manual" if cfg.manual else "Automatic"
         extras = []
-        if cfg.headphones:
-            extras.append("headphones")
         if cfg.override_window_s:
             extras.append(f"{cfg.override_window_s:g}s pause")
         if cfg.flag_on_skip:

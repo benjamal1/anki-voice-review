@@ -103,7 +103,7 @@ def cmd_listen(cfg: Config, args: argparse.Namespace) -> int:
             length_ms=cfg.whisper_length_ms,
             vad_threshold=cfg.vad_threshold,
         )
-    speaker = Speaker(cfg.say_voice, cfg.say_rate, cfg.echo_tail_s)
+    speaker = Speaker(cfg.say_voice, cfg.say_rate)
     try:
         transcriber.preflight()
         speaker.preflight()
@@ -146,7 +146,7 @@ def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
             length_ms=cfg.whisper_length_ms,
             vad_threshold=cfg.vad_threshold,
         )
-    speaker = Speaker(cfg.say_voice, cfg.say_rate, cfg.echo_tail_s)
+    speaker = Speaker(cfg.say_voice, cfg.say_rate)
     anki = AnkiConnect(cfg.anki_url)
 
     try:

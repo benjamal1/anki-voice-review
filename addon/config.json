@@ -1,8 +1,6 @@
 {
   "terminator": "done",
   "override_window_seconds": 0,
-  "headphones": true,
-  "barge_in": false,
   "grading_mode": "auto",
   "flag_on_skip": 0,
   "fuzzy_correct": 0.62,
@@ -11,7 +9,6 @@
   "whisper_model": "~/whisper-models/ggml-base.en.bin",
   "say_voice": "",
   "say_rate": "190",
-  "echo_tail_seconds": 0.35,
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "qwen2.5:3b",
   "ollama_keep_alive": "30m",

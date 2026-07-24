@@ -163,11 +163,6 @@ class TestEverySettingRoundTrips:
     """Each control must save the value it is showing. A control that silently fails to persist
     is indistinguishable from the feature behind it being broken."""
 
-    def test_headphones_checkbox(self, qapp):
-        dialog = SettingsDialog(None, dict(STALE))
-        dialog.headphones.setChecked(True)
-        assert Config.from_mapping(dialog.values()).headphones
-
     def test_flag_on_skip(self, qapp):
         dialog = SettingsDialog(None, dict(STALE))
         dialog.flag_on_skip.setCurrentIndex(dialog.flag_on_skip.findData(4))

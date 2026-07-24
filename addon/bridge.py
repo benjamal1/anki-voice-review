@@ -173,30 +173,52 @@ class AnkiBridge:
                 raise BridgeError("no card is showing, so there is nothing to skip")
             reviewer = self._reviewer()
             card = reviewer.card
+            cid = card.id
 
-            # Try each known spelling in turn and say which ones were unavailable, rather than
-            # reporting a bare False that could mean any of them. Other add-ons also hook
-            # burying (AJT Mortician, for one), so this is a genuinely contested code path.
+            # Use the SYNCHRONOUS scheduler bury, not reviewer.bury_current_card(). The
+            # reviewer method runs the bury as a background CollectionOp and returns before it
+            # finishes, which raced the loop's own advance and showed "buried 0 cards". The
+            # scheduler call blocks, returns a count, and cannot race.
             errors = []
-            method = getattr(reviewer, "bury_current_card", None)
+            count = None
+            sched = mw.col.sched
+            method = getattr(sched, "bury_cards", None) or getattr(sched, "buryCards", None)
             if callable(method):
                 try:
-                    method()
-                    return True
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"reviewer.bury_current_card: {exc}")
+                    changes = method([cid])
+                except TypeError:
+                    changes = method([cid], True)  # older signature: manual= positional
+                count = getattr(changes, "count", None)
+            else:
+                errors.append("no bury_cards on the scheduler")
 
-            for name in ("bury_cards", "buryCards"):
-                sched_method = getattr(mw.col.sched, name, None)
-                if callable(sched_method):
+            from . import tracelog
+
+            tracelog.write("bury-detail", f"cid={cid} queue={card.queue} count={count}")
+
+            # Advance the reviewer to the next card ourselves, since the sync bury does not.
+            advanced = False
+            for name in ("nextCard", "_getCard"):
+                nxt = getattr(reviewer, name, None)
+                if callable(nxt):
                     try:
-                        sched_method([card.id])
-                        mw.reset()
-                        return True
+                        nxt()
+                        advanced = True
+                        break
                     except Exception as exc:  # noqa: BLE001
-                        errors.append(f"sched.{name}: {exc}")
+                        errors.append(f"{name}: {exc}")
+            if not advanced:
+                mw.reset()  # last resort: rebuild queues; reviewer re-fetches
 
-            raise BridgeError("could not bury the card — " + "; ".join(errors or ["no usable API"]))
+            if count == 0:
+                # Buried nothing — report it rather than pretend it worked.
+                raise BridgeError(
+                    "Anki buried 0 cards. Another add-on (AJT Mortician?) may be intercepting "
+                    "bury, or the card is not in a buryable state."
+                )
+            if errors and count is None:
+                raise BridgeError("could not bury the card — " + "; ".join(errors))
+            return True
 
         return bool(run_on_main(bury))
 

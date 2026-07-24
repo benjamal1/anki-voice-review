@@ -29,7 +29,7 @@ from .avr.session import (
     StartOverrideTimer,
 )
 from .avr.stt import Transcriber, TranscriberError
-from .avr.tts import Speaker, SpeakerError, is_echo
+from .avr.tts import Speaker, SpeakerError
 from .bridge import AnkiBridge, BridgeError, NoCardShowing
 from . import tracelog
 
@@ -77,7 +77,7 @@ class VoiceWorker(threading.Thread):
             length_ms=cfg.whisper_length_ms,
             vad_threshold=cfg.vad_threshold,
         )
-        self.tts = Speaker(cfg.say_voice, cfg.say_rate, cfg.echo_tail_s)
+        self.tts = Speaker(cfg.say_voice, cfg.say_rate)
 
         # NOT self._stop: threading.Thread already defines a private _stop() method, and
         # overwriting it makes is_alive() raise "'Event' object is not callable" the moment
@@ -85,8 +85,6 @@ class VoiceWorker(threading.Thread):
         self._stopping = threading.Event()
         self._override_deadline: Optional[float] = None
         self._last_card_id = 0
-        self._pending_line: Optional[str] = None
-        self._spoke = False
 
     def request_stop(self) -> None:
         """Stop now, not at the end of the current sentence.
@@ -130,19 +128,9 @@ class VoiceWorker(threading.Thread):
         tracelog.write("intent", type(intent).__name__)
         if isinstance(intent, Speak):
             self.on_phase(PHASE_SPEAKING, intent.text)
-            if self.cfg.barge_in and self.cfg.headphones:
-                # Listen through the speech so the user can interrupt it.
-                if self._speak_interruptibly(intent.text):
-                    # They talked over it; their words are queued. Stop this batch and let the
-                    # loop pick them up.
-                    return False
-            else:
-                # Plain speak-then-listen. On headphones nothing echoes, so we are done. On
-                # speakers the mic heard the TTS, so flag the loop to drain that backlog before
-                # it listens.
-                self.tts.speak(intent.text)
-                if not self.cfg.headphones:
-                    self._spoke = True
+            # Non-blocking: queue it and move on. The loop keeps listening the whole time, so
+            # the moment the user speaks, the next heard line interrupts this (see run()).
+            self.tts.say(intent.text)
             if self.session.phase.name == "LISTENING":
                 self.on_phase(PHASE_LISTENING, "")
 
@@ -189,23 +177,6 @@ class VoiceWorker(threading.Thread):
             self._stopping.set()
             return False
 
-    def _speak_interruptibly(self, text: str) -> bool:
-        """Speak while still listening. Returns True if the user talked over it.
-
-        Headphones mode only: nothing being said reaches the microphone, so listening can
-        continue throughout — which is the whole point, since it means you can say "skip" the
-        moment you recognise a card, or start answering as soon as you know it.
-        """
-        self.tts.start(text)
-        while self.tts.is_speaking and not self._stopping.is_set():
-            line = self.stt.get(timeout=0.05)
-            if line:
-                self.tts.interrupt()
-                self.tts.resume()  # the interrupt was for this sentence only
-                self._pending_line = line
-                return True
-        return False
-
     def _reattach_current(self) -> None:
         """Point the session at the card the reviewer is showing, without re-reading it."""
         try:
@@ -220,13 +191,13 @@ class VoiceWorker(threading.Thread):
         # Answering is asynchronous; without waiting for the reviewer to present a fresh
         # question we read back the card just answered and speak it again.
         if not self.bridge.wait_for_question():
-            self.tts.speak("Deck finished", gate=self.stt)
+            self.tts.say("Deck finished")
             self._stopping.set()
             return []
         try:
             card = self.bridge.current_card()
         except NoCardShowing:
-            self.tts.speak("Deck finished", gate=self.stt)
+            self.tts.say("Deck finished")
             self._stopping.set()
             return []
         except BridgeError as exc:
@@ -256,14 +227,11 @@ class VoiceWorker(threading.Thread):
             tracelog.write(
                 "config",
                 f"grading={self.cfg.grading_mode} pause={self.cfg.override_window_s} "
-                f"headphones={self.cfg.headphones} flag_on_skip={self.cfg.flag_on_skip} "
-                f"terminator={self.cfg.terminator!r}",
+                f"flag_on_skip={self.cfg.flag_on_skip} terminator={self.cfg.terminator!r}",
             )
             self.on_heard(
                 f"[settings] grading={self.cfg.grading_mode} "
-                f"pause={self.cfg.override_window_s}s "
-                f"headphones={'on' if self.cfg.headphones else 'off'} "
-                f"flag_on_skip={self.cfg.flag_on_skip} "
+                f"pause={self.cfg.override_window_s}s flag_on_skip={self.cfg.flag_on_skip} "
                 f"vad={self.cfg.vad_threshold} threads={self.cfg.whisper_threads}"
             )
             self.stt.preflight()
@@ -290,31 +258,13 @@ class VoiceWorker(threading.Thread):
             self._execute(self.session.begin_card(card))
 
             while not self._stopping.is_set():
-                # Everything heard while we were speaking on the speakers path is our own voice
-                # echoing back. Clear it once, here, rather than trying to tell it apart line by
-                # line — that is what let the answer's echo bury the user's "again"/"skip".
-                if self._spoke and not self.cfg.headphones:
-                    dropped = self.stt.drain()
-                    self._spoke = False
-                    if dropped:
-                        tracelog.write("drained-echo", f"{dropped} line(s)")
-
-                if self._pending_line is not None:
-                    line, self._pending_line = self._pending_line, None
-                else:
-                    line = self.stt.get(timeout=POLL_S)
-
+                line = self.stt.get(timeout=POLL_S)
                 if line:
-                    if not self.cfg.headphones and is_echo(
-                        line, self.tts.recent_spoken(), self.cfg.command_words
-                    ):
-                        # Speakers only: the machine hearing itself. On headphones this cannot
-                        # happen, so the filter is skipped and never risks eating a real reply.
-                        tracelog.write("echo-dropped", repr(line))
-                        continue
-                    # Report what it was understood AS, not just what was heard. "It shows
-                    # skip but nothing happens" and "skip was never recognised" look identical
-                    # from the outside, and they need completely different fixes.
+                    # The user is speaking, so stop talking over them immediately. This is the
+                    # whole of barge-in: sensing is never gated on whether the TTS is busy, and
+                    # any heard input cuts the speech off at once. (Headphones required, so a
+                    # heard line is always the user, never our own voice.)
+                    self.tts.interrupt()
                     action = match_command(line, self.cfg.command_words, self.cfg.terminator)
                     tracelog.write(
                         "heard", f"{line!r} action={action} phase={self.session.phase.name}"

@@ -74,7 +74,7 @@ def _env_float(name: str, default: float) -> float:
 #
 # Migration is possible because a stored value equal to the old default was, by definition,
 # never deliberately chosen. Values that differ are the user's and are left alone.
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 
 _DEFAULT_MIGRATIONS = {
     # key: (old default, new default)
@@ -83,12 +83,11 @@ _DEFAULT_MIGRATIONS = {
     "fuzzy_wrong": (0.4, 0.3),
     "vad_threshold": (0.6, 0.45),
     "whisper_length_ms": (8000, 5000),
-    # Headphones became the default. A stored False equal to the old default was never a
-    # deliberate speakers choice, so move it forward; a value already True stays put.
-    "headphones": (False, True),
 }
 
-_DEAD_KEYS = ("use_llm_judge",)
+# headphones/barge_in removed: the loop always listens (headphones required); echo_tail
+# and vad/echo knobs no longer used.
+_DEAD_KEYS = ("use_llm_judge", "headphones", "barge_in", "echo_tail_seconds")
 
 
 def migrate_config(stored: dict) -> tuple:
@@ -162,9 +161,6 @@ class Config:
 
     say_voice: str = field(default_factory=lambda: _env_str("AVR_SAY_VOICE", ""))
     say_rate: str = field(default_factory=lambda: _env_str("AVR_SAY_RATE", "190"))
-    # The mic keeps hearing while `say` plays. Audio takes a moment to drain after the process
-    # exits, so the gate stays shut a little longer than the call itself.
-    echo_tail_s: float = field(default_factory=lambda: _env_float("AVR_ECHO_TAIL", 0.35))
 
     # --- Grading ---
     # Defaults deliberately lenient. Speech recognition mangles words, people phrase answers
@@ -206,18 +202,6 @@ class Config:
     # red-flagged cards for review.
     flag_on_skip: int = field(default_factory=lambda: int(_env_float("AVR_FLAG_ON_SKIP", 0)))
 
-    # Headphones ON by default. With headphones the microphone never hears the computer's own
-    # voice, so the entire echo problem — the mic transcribing the card being read back and
-    # burying your reply — simply cannot happen. On speakers a drain step is needed to work
-    # around it; headphones remove the need. This is the reliable path.
-    headphones: bool = True
-
-    # Barge-in: keep listening WHILE a card is read so you can talk over it — answer or say
-    # "skip" the moment you know, without waiting for the reading to finish. Off by default:
-    # it needs headphones (or it hears itself), and the real-time interrupt is more delicate
-    # than the plain speak-then-listen flow. Turn it on once the basics are solid.
-    barge_in: bool = False
-
     # Spoken words per action. See DEFAULT_COMMAND_WORDS.
     command_words: dict = field(default_factory=lambda: {k: list(v) for k, v in DEFAULT_COMMAND_WORDS.items()})
 
@@ -243,7 +227,6 @@ class Config:
             whisper_model=Path(str(pick("whisper_model", defaults.whisper_model))).expanduser(),
             say_voice=str(data.get("say_voice") or ""),
             say_rate=str(pick("say_rate", defaults.say_rate)),
-            echo_tail_s=float(pick("echo_tail_seconds", defaults.echo_tail_s)),
             fuzzy_correct=float(pick("fuzzy_correct", defaults.fuzzy_correct)),
             fuzzy_wrong=float(pick("fuzzy_wrong", defaults.fuzzy_wrong)),
             ollama_url=str(pick("ollama_url", defaults.ollama_url)),
@@ -258,8 +241,6 @@ class Config:
             ollama_keep_alive=str(data.get("ollama_keep_alive") or "30m"),
             announce_verdict=bool(data.get("announce_verdict", True)),
             flag_on_skip=int(data.get("flag_on_skip") or 0),
-            headphones=bool(data.get("headphones", True)),
-            barge_in=bool(data.get("barge_in", False)),
             command_words=_merge_command_words(data.get("command_words")),
         )
 

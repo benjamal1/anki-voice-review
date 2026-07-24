@@ -1,16 +1,13 @@
-"""Text-to-speech via macOS `say`, plus the echo gate.
+"""Text-to-speech via macOS `say`.
 
-No pre-generated cache. `say` speaks on-device in about the time it takes to start a process,
-so a cache would buy a few milliseconds in exchange for a generation pass, a cache directory,
-and audio that goes stale whenever a card is edited.
+Speech is **non-blocking and instantly interruptible**. `say(text)` queues an utterance and
+returns immediately; a background thread speaks queued items in order. `interrupt()` clears the
+queue and kills whatever is mid-sentence right now.
 
-**The echo gate is the important part.** The microphone is open for the whole session, so
-without this the speech synthesiser's own output gets transcribed as if the user had said it —
-on every single card, not as an edge case. Two defences, because either alone leaks:
-
-1. `say` is run to completion before listening resumes (a wall-clock gate).
-2. The transcript queue is drained afterwards, since whisper buffers audio and can emit lines
-   from the TTS *after* `say` has already exited.
+This is what lets sensing be decoupled from speaking: the review loop never blocks waiting for
+a card to finish being read, so it is always free to hear a command, and the moment it does it
+interrupts the speech. Requires headphones — the mic must not hear the `say` output, or it
+would transcribe the card back to itself. Speakers mode was removed.
 """
 
 from __future__ import annotations
@@ -18,43 +15,11 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
-import time
-from typing import Optional, Protocol
+from typing import Optional
 
 from .stt import resolve_binary
 
 log = logging.getLogger(__name__)
-
-# How similar a transcript line must be to what was just spoken to count as the machine
-# hearing itself. Generous, because speech recognition mangles synthesised speech more than
-# real speech; a command word will never come near a whole card's text anyway.
-ECHO_SIMILARITY = 0.55
-
-
-def is_echo(line: str, spoken, command_words: dict | None = None) -> bool:
-    """True when a transcript line is the computer hearing its own voice.
-
-    `spoken` may be a single string or a list of recent utterances. Because a batch can speak
-    several things (answer, then a prompt), matching only the last one let the earlier echo
-    through — which is what buried the user's reply on speakers. Matching any recent utterance
-    closes that.
-
-    A recognised command is never echo. Prompts naturally contain the words they ask for, so
-    without this exception a prompt would suppress the very reply it requested.
-    """
-    from .grade import fuzzy_score
-    from .session import match_command
-
-    if not line:
-        return False
-    if match_command(line, command_words):
-        return False
-    candidates = [spoken] if isinstance(spoken, str) else list(spoken or [])
-    return any(c and fuzzy_score(c, line) >= ECHO_SIMILARITY for c in candidates)
-
-
-class Drainable(Protocol):
-    def drain(self) -> int: ...
 
 
 class SpeakerError(RuntimeError):
@@ -62,35 +27,16 @@ class SpeakerError(RuntimeError):
 
 
 class Speaker:
-    def __init__(self, voice: str = "", rate: str = "190", echo_tail_s: float = 0.35) -> None:
+    def __init__(self, voice: str = "", rate: str = "190", **_ignored) -> None:
         self._voice = voice
         self._rate = rate
-        self._echo_tail_s = echo_tail_s
-        self.muted_until = 0.0
+        self._queue: list[str] = []
         self._process: Optional[subprocess.Popen] = None
-        self._cancelled = False
-        self._lock = threading.Lock()
+        self._cancel = False
+        self._shutdown = False
+        self._cond = threading.Condition()
+        self._thread: Optional[threading.Thread] = None
         self.last_spoken = ""
-        self._recent: list = []  # last few utterances, for echo that leaks past the drain
-
-    def interrupt(self) -> None:
-        """Cut off whatever is being said, right now.
-
-        Pressing Stop mid-sentence should stop the sentence. `say` on a long card can run for
-        many seconds, and without this the worker sits blocked inside it, ignoring the stop
-        flag until it finishes — which also delays releasing the microphone, so a restart
-        finds whisper still holding it.
-        """
-        with self._lock:
-            self._cancelled = True
-            process = self._process
-        if process and process.poll() is None:
-            process.terminate()
-
-    def resume(self) -> None:
-        """Clear a previous interrupt so the speaker can be used again."""
-        with self._lock:
-            self._cancelled = False
 
     def preflight(self) -> None:
         if resolve_binary("say") is None:
@@ -106,105 +52,89 @@ class Speaker:
             cmd += ["-r", str(self._rate)]
         return cmd + ["--", text]
 
-    def speak(self, text: str, gate: Drainable | None = None) -> None:
-        """Say it, then let the echo pass without swallowing the user's reply.
-
-        Blocking on purpose: on speakers, letting `say` overlap the listening window is what
-        causes self-transcription.
-
-        What it deliberately does NOT do any more is drain the transcript queue afterwards.
-        Draining discards everything that arrived, which includes the user answering promptly —
-        say "skip" as the question finishes, or "again" the moment it asks, and the command
-        vanished. Echo is now identified by *content* instead: the text just spoken is recorded,
-        and the reader discards only lines that actually look like it. See `is_echo`.
-        """
+    def say(self, text: str, gate=None) -> None:
+        """Queue an utterance and return immediately. Speaks in order on a background thread."""
         text = (text or "").strip()
         if not text:
             return
-        with self._lock:
-            if self._cancelled:
-                return  # stop was pressed; do not start a new sentence
-
-        self.muted_until = time.monotonic() + self._echo_tail_s
-        with self._lock:
+        with self._cond:
+            self._queue.append(text)
+            self._cancel = False
             self.last_spoken = text
-            self._recent.append(text)
-            del self._recent[:-4]  # keep the last 4
-        try:
-            # Popen rather than run() so interrupt() has something to terminate.
-            process = subprocess.Popen(
-                self._command(text), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-            )
-        except FileNotFoundError as exc:
-            raise SpeakerError("`say` not found; this project runs on macOS only") from exc
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, daemon=True, name="avr-say")
+                self._thread.start()
+            self._cond.notify()
 
-        with self._lock:
-            self._process = process
-        try:
+    # Blocking convenience for the CLI and one-off prompts. The loop uses say().
+    def speak(self, text: str, gate=None) -> None:
+        self.say(text)
+        self.wait()
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                while not self._queue and not self._cancel and not self._shutdown:
+                    self._cond.wait()
+                if self._shutdown:
+                    return
+                if self._cancel:
+                    self._queue.clear()
+                    self._cancel = False
+                    continue
+                text = self._queue.pop(0)
+            try:
+                process = subprocess.Popen(
+                    self._command(text), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            except FileNotFoundError:
+                log.error("`say` not found")
+                return
+            with self._cond:
+                self._process = process
             process.wait()
-        finally:
-            with self._lock:
+            with self._cond:
                 self._process = None
 
-        if process.returncode not in (0, -15, -9):  # -15/-9 are our own terminate/kill
-            # A failed TTS call should not end a review session — the user can still read the
-            # screen. Log it and carry on.
-            stderr = (process.stderr.read() if process.stderr else b"") or b""
-            log.warning("say failed: %s", stderr.decode(errors="replace").strip())
+    def interrupt(self) -> None:
+        """Stop speaking right now and drop anything queued. The core of fast barge-in."""
+        with self._cond:
+            self._cancel = True
+            self._queue.clear()
+            process = self._process
+            self._cond.notify()
+        if process and process.poll() is None:
+            process.terminate()
 
-        with self._lock:
-            if self._cancelled:
-                return  # skip the echo tail; nothing is playing to echo
-
-        # Audio keeps arriving at the mic for a moment after the process exits.
-        remaining = self.muted_until - time.monotonic()
-        if remaining > 0:
-            time.sleep(remaining)
-
-    def start(self, text: str) -> None:
-        """Begin speaking and return immediately, so the caller can keep listening.
-
-        Used in headphones mode: nothing being said can reach the microphone, so there is no
-        reason to stop listening while it talks — and every reason not to, since talking over
-        it is the point.
-        """
-        text = (text or "").strip()
-        if not text:
-            return
-        with self._lock:
-            if self._cancelled:
-                return
-        try:
-            process = subprocess.Popen(
-                self._command(text), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        except FileNotFoundError as exc:
-            raise SpeakerError("`say` not found; this project runs on macOS only") from exc
-        with self._lock:
-            self._process = process
+    def resume(self) -> None:
+        with self._cond:
+            self._cancel = False
 
     @property
     def is_speaking(self) -> bool:
-        with self._lock:
+        with self._cond:
             process = self._process
         return process is not None and process.poll() is None
 
     def wait(self) -> None:
-        with self._lock:
+        """Block until the queue is empty and nothing is speaking. For the CLI/tests."""
+        while True:
+            with self._cond:
+                idle = not self._queue and (self._process is None or self._process.poll() is not None)
+            if idle:
+                return
+            with self._cond:
+                self._cond.wait(timeout=0.05)
+
+    def stop(self) -> None:
+        with self._cond:
+            self._shutdown = True
+            self._cancel = True
+            self._queue.clear()
             process = self._process
-        if process is not None:
-            try:
-                process.wait()
-            except Exception:  # noqa: BLE001 - already terminated
-                pass
-
-    @property
-    def is_muted(self) -> bool:
-        return time.monotonic() < self.muted_until
-
-    def recent_spoken(self) -> list:
-        with self._lock:
-            return list(self._recent)
+            self._cond.notify()
+        if process and process.poll() is None:
+            process.terminate()
 
 
 class FakeSpeaker:
@@ -212,40 +142,31 @@ class FakeSpeaker:
 
     def __init__(self) -> None:
         self.said: list[str] = []
-        self.muted_until = 0.0
-        self.interrupted = False
         self.last_spoken = ""
-        self._recent: list = []
-
-    def interrupt(self) -> None:
-        self.interrupted = True
-
-    def resume(self) -> None:
-        self.interrupted = False
-
-    def start(self, text: str) -> None:
-        self.speak(text)
-
-    def wait(self) -> None: ...
-
-    @property
-    def is_speaking(self) -> bool:
-        return False
-
-    def recent_spoken(self) -> list:
-        return list(self._recent)
+        self._interrupted = False
 
     def preflight(self) -> None: ...
 
-    def speak(self, text: str, gate: Drainable | None = None) -> None:
+    def say(self, text: str, gate=None) -> None:
         text = (text or "").strip()
-        if not text or self.interrupted:
+        if not text:
             return
         self.said.append(text)
         self.last_spoken = text
-        self._recent.append(text)
-        del self._recent[:-4]
+
+    def speak(self, text: str, gate=None) -> None:
+        self.say(text)
+
+    def interrupt(self) -> None:
+        self._interrupted = True
+
+    def resume(self) -> None:
+        self._interrupted = False
+
+    def wait(self) -> None: ...
+
+    def stop(self) -> None: ...
 
     @property
-    def is_muted(self) -> bool:
+    def is_speaking(self) -> bool:
         return False
