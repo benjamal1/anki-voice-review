@@ -102,7 +102,7 @@ and on a wrong answer the correct answer is read back. There is then a short win
 the grade by voice before it is submitted.
 
 | Say | What happens | **Stability** |
-|---|---||---|
+|---|---|---|
 | your answer, then **done** | grade it, then straight on to the next card |---|
 | **undo** (or *go back*) | take back the last grade. It says "undone" and waits — nothing is read out, just say how it should have been graded and it is applied to that card | Not tested reliably |
 | just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |---|
