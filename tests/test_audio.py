@@ -129,3 +129,31 @@ class TestSilenceHallucinations:
         # Only whole-line matches are dropped, so a genuine answer containing them is safe.
         assert clean_line("thank you notes are the answer") != ""
         assert clean_line("you press the button") != ""
+
+
+class TestRealWhisperOutput:
+    """These are verbatim lines from a real session's trace log. My earlier tests fed clean
+    strings like "skip"; whisper actually prefixes every line with a timestamp span, and that
+    prefix broke every whole-utterance command match — the real cause of "skip does nothing"."""
+
+    def test_timestamped_command_cleans_to_the_bare_word(self):
+        assert clean_line("[00:00:00.000 --> 00:00:04.000]   Skip.") == "Skip."
+
+    def test_timestamped_answer_cleans_to_the_words(self):
+        assert clean_line("[00:00:00.000 --> 00:00:04.240]   Proprioception done.") == "Proprioception done."
+
+    def test_a_cleaned_command_is_recognised(self):
+        from avr.session import match_command
+
+        assert match_command(clean_line("[00:00:00.000 --> 00:00:04.000]   Skip.")) == "skip"
+        assert match_command(clean_line("[00:00:00.000 --> 00:00:02.000]   again")) == "again"
+        assert match_command(clean_line("[00:00:00.000 --> 00:00:02.000]   Good.")) == "good"
+
+    def test_keyboard_clicking_noise_is_dropped(self):
+        assert clean_line("[00:00:00.000 --> 00:00:03.000]   (keyboard clicking)") == ""
+
+    def test_bare_done_still_terminates(self):
+        from avr.session import split_terminator
+
+        speech, terminated = split_terminator(clean_line("[00:00:00.000 --> 00:00:03.000]   Done."), "done")
+        assert terminated and speech == ""

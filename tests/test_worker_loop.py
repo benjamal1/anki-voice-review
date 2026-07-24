@@ -272,3 +272,50 @@ class TestSpeakersEchoDoesNotBuryCommands:
         assert is_echo("the powerhouse of the cell", recent)
         assert is_echo("the power house of the cell", recent)  # mangled TTS
         assert not is_echo("again", recent)  # the user's reply survives
+
+
+# Verbatim from a real session's trace log — whisper's actual output, timestamps and all.
+# Earlier tests fed clean strings and passed while the real thing was broken. This is the fix
+# for that testing gap: drive the worker with exactly what whisper emits.
+class TestRealWhisperLinesReachAnki:
+    def test_timestamped_skip_buries(self):
+        bridge, errors, _ = run_worker(["[00:00:00.000 --> 00:00:04.000]   Skip."])
+        assert ("bury",) in bridge.calls, "the real 'skip' line must bury"
+        assert errors == []
+
+    def test_timestamped_again_grades_in_manual_mode(self):
+        cfg = Config(grading_mode="manual")
+        bridge, errors, _ = run_worker(
+            [
+                "[00:00:00.000 --> 00:00:04.240]   Proprioception done.",
+                "[00:00:00.000 --> 00:00:02.000]   again",
+            ],
+            cfg=cfg,
+        )
+        assert ("answer_card", 1) in bridge.calls, "the real 'again' line must grade"
+        assert errors == []
+
+    def test_timestamped_good_grades(self):
+        cfg = Config(grading_mode="manual")
+        bridge, _, _ = run_worker(
+            [
+                "[00:00:00.000 --> 00:00:03.000]   my answer done",
+                "[00:00:00.000 --> 00:00:02.000]   Good.",
+            ],
+            cfg=cfg,
+        )
+        assert ("answer_card", 3) in bridge.calls
+
+    def test_keyboard_noise_between_commands_is_ignored(self):
+        bridge, _, _ = run_worker(
+            [
+                "[00:00:00.000 --> 00:00:03.000]   (keyboard clicking)",
+                "[00:00:00.000 --> 00:00:04.000]   Skip.",
+            ]
+        )
+        assert ("bury",) in bridge.calls
+
+    def test_auto_mode_grades_a_real_answer_line(self):
+        cards = [Card(1, "q", "Paris")]
+        bridge, _, _ = run_worker(["[00:00:00.000 --> 00:00:03.000]   Paris done."], cards=cards)
+        assert [c for c in bridge.calls if c[0] == "answer_card"]

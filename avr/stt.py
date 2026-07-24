@@ -24,6 +24,13 @@ log = logging.getLogger(__name__)
 
 # whisper-stream redraws its current line in place, so stdout carries terminal control codes.
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\r")
+
+# whisper-stream prefixes each utterance with its timestamp span:
+#   [00:00:00.000 --> 00:00:04.000]   Skip.
+# Left in, this normalises to "00 00 00 000 ... skip" and no whole-utterance command ever
+# matches — the single reason "skip"/"again"/"good" did nothing while "done" (matched by a
+# trailing-word rule) worked by accident. Strip it before anything else looks at the line.
+TIMESTAMP = re.compile(r"^\s*\[\d{2}:\d{2}:\d{2}\.\d+\s*-->\s*\d{2}:\d{2}:\d{2}\.\d+\]\s*")
 # Emitted for silence and non-speech audio. These are not things anyone said.
 NOISE_LINES = {
     "[blank_audio]",
@@ -80,7 +87,8 @@ def resolve_binary(name: str) -> str | None:
 
 def clean_line(raw: str) -> str:
     """Strip control codes and non-speech markers. Returns '' for anything not worth hearing."""
-    text = ANSI.sub("", raw).strip()
+    text = ANSI.sub("", raw)
+    text = TIMESTAMP.sub("", text).strip()
     if not text:
         return ""
     if CONTROL_LINE.match(text):
@@ -240,12 +248,17 @@ class FakeTranscriber:
     def preflight(self) -> None: ...
 
     def get(self, timeout: float) -> str | None:
-        if not self._lines:
-            time.sleep(min(timeout, 0.01))
-            return None
-        if self._delay:
-            time.sleep(self._delay)
-        return self._lines.pop(0)
+        # Apply clean_line just like the real _pump, so a test can inject raw whisper output
+        # (timestamps, noise markers) and exercise the actual parsing path. Skip empties, as
+        # the real reader does.
+        while self._lines:
+            if self._delay:
+                time.sleep(self._delay)
+            text = clean_line(self._lines.pop(0))
+            if text:
+                return text
+        time.sleep(min(timeout, 0.01))
+        return None
 
     def drain(self) -> int:
         self.drained += 1
