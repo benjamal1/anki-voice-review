@@ -16,7 +16,7 @@ files, so this one does not ship a speech engine. It drives three things that li
 |---|---|---|
 | **Reading cards aloud** | `say`, built into macOS | Included with macOS — nothing to install |
 | **Hearing your answer** | **whisper.cpp**, installed separately via Homebrew, plus a ~141 MB model file you download once | **Required.** Without it there is no speech recognition and the add-on cannot work |
-| **Smarter grading** | **Ollama**, installed separately | **Optional.** Without it, answers are graded by text similarity alone |
+| **Grading your answer** | **Ollama**, installed separately | **Optional.** Only needed for Automatic mode. Manual mode needs no model at all |
 
 If you install nothing, the add-on will tell you what is missing and how to get it —
 **Tools → Voice Review → Settings**, top panel. It re-checks on demand and refuses to start a
@@ -64,12 +64,12 @@ curl -L -o ~/whisper-models/ggml-base.en.bin \
 Want better accuracy and can accept a little more delay? Download `ggml-small.en.bin` from the
 same place and point **Settings → Whisper model** at it.
 
-### 4. Install Ollama (optional, recommended)
+### 4. Install Ollama (optional)
 
-Without this, grading compares your words to the card's words as text. That works well for
-short factual answers, but marks a correct answer wrong when you phrase it very differently.
-Ollama adds a local language model that judges meaning, and it only runs on the answers text
-matching could not settle.
+Only needed for **Automatic** grading. If you would rather grade your own answers, choose
+**Manual** in Settings and skip this step entirely — nothing else is required.
+
+In Automatic mode, text similarity settles the clear cases and Ollama judges the rest.
 
 Download from [ollama.com](https://ollama.com), open the app, then:
 
@@ -104,7 +104,7 @@ the grade by voice before it is submitted.
 | just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |
 | **again** / **hard** / **good** / **easy** | set the grade yourself — during the override window, or instead of answering |
 | **repeat** | read the card again, discard what you had said |
-| **skip** | bury the card and move on, no grade |
+| **skip** or **bury** | set the card aside and move on. The answer is never shown or read — for image cards and anything that cannot be read aloud |
 | **quit** | end the session |
 
 **Stop** ends the session immediately, cutting off mid-sentence if it is talking.
@@ -125,7 +125,7 @@ mis-hearings, not mis-grading. If the transcript is right but the grade is wrong
 |---|---|---|
 | End-of-answer word | `done` | the word that finishes your answer |
 | Override window | 2.5 s | how long you get to change the grade by voice |
-| Use the local LLM | on | judge meaning on answers text matching cannot settle |
+| Grading | Automatic | **Automatic** grades for you. **Manual** reads the answer back and waits for you to say good or again — no model needed, no time limit |
 | Correct at or above | 0.62 | similarity needed to be marked correct outright. Lower = more lenient |
 | Incorrect below | 0.30 | similarity below which it is marked wrong outright |
 | Whisper model | `~/whisper-models/ggml-base.en.bin` | swap in `small.en` for accuracy over speed |
@@ -145,10 +145,20 @@ Two stages, cheapest first.
    similarity and best-phrase-within-the-sentence. So "the capital is Paris" scores full marks
    against a card that just says "Paris". Mathematical notation is expanded to how it is
    spoken, so `2^K` matches "two to the power of K".
-2. **The local model**, only when similarity lands in the middle and cannot decide. If Ollama
-   is unavailable, the middle band is split rather than failed, and reviewing continues.
+2. **The local model**, only when similarity lands in the middle and cannot decide.
 
 Most answers never reach stage 2.
+
+If nothing can decide — the model is unavailable and similarity is inconclusive — the answer
+is read back and **you** are asked to grade it. It is never guessed. An earlier version split
+the middle band by score in that situation; that was a coin flip wearing a threshold, and it
+produced verdicts that looked authoritative and were not.
+
+### Manual mode
+
+Set **Grading** to Manual. The card is read out, you answer, the answer is read back, and it
+waits for you to say **good** or **again** — indefinitely, with no default and no timer. No
+language model is involved at any point.
 
 **Cloze cards** grade against the deleted text only, not the whole sentence — including
 deletions inside MathJax, where Anki marks up nothing and the deletion has to be recovered by

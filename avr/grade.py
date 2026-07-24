@@ -49,8 +49,11 @@ Reply with exactly one word: CORRECT or INCORRECT."""
 class Verdict:
     correct: bool
     score: float
-    source: str  # "fuzzy" | "judge" | "fuzzy-fallback"
+    source: str  # "fuzzy" | "judge" | "no answer" | "unresolved"
     detail: str = ""
+    # True when nothing could decide this and the person should be asked. There is no verdict
+    # to trust here; `correct` is meaningless and must not be acted on.
+    needs_human: bool = False
 
 
 def _containment_ratio(needle: str, haystack: str) -> float:
@@ -151,17 +154,20 @@ def correct_threshold(answer: str, cfg: Config) -> float:
     Terse answers get a stricter bar — see SHORT_ANSWER_CORRECT. Counted on the raw answer,
     before notation expansion, because "2^K" is one idea however many words it expands into.
 
-    Only applied when the judge is actually available. The strict bar exists to *route* a
-    close-but-maybe-wrong short answer to the judge; with no judge to route to, raising the bar
-    just marks more things wrong, which is the opposite of what it is for.
+    The strict bar exists to *route* a close-but-maybe-wrong short answer to a second opinion,
+    so it only applies when automatic grading is in play at all.
     """
-    if cfg.use_judge and len(answer.split()) <= SHORT_ANSWER_TOKENS:
+    if not cfg.manual and len(answer.split()) <= SHORT_ANSWER_TOKENS:
         return max(cfg.fuzzy_correct, SHORT_ANSWER_CORRECT)
     return cfg.fuzzy_correct
 
 
 def grade(question: str, answer: str, transcript: str, cfg: Config) -> Verdict:
     """Fuzzy first; the judge only sees the ambiguous band."""
+    if cfg.manual:
+        # The user grades every card themselves, so any automatic verdict is wasted latency.
+        return Verdict(False, 0.0, "manual", "user grades this", needs_human=True)
+
     score = fuzzy_score(answer, transcript)
     correct_at = correct_threshold(answer, cfg)
 
@@ -170,23 +176,12 @@ def grade(question: str, answer: str, transcript: str, cfg: Config) -> Verdict:
     if score < cfg.fuzzy_wrong:
         return Verdict(False, score, "fuzzy", "clearly different")
 
-    if not cfg.use_judge:
-        return _without_judge(score, cfg, "judge disabled")
-
     judged = ask_judge(question, answer, transcript, cfg)
     if judged is None:
-        return _without_judge(score, cfg, "judge unavailable")
+        # No model to consult and similarity already said "I cannot tell". Every automatic
+        # answer here is a guess: marking incorrect punishes answers that were probably right,
+        # and splitting the band by score is just a coin flip wearing a threshold. Ask instead.
+        return Verdict(
+            False, score, "unresolved", "could not be graded automatically", needs_human=True
+        )
     return Verdict(judged, score, "judge", "semantic verdict")
-
-
-def _without_judge(score: float, cfg: Config, why: str) -> Verdict:
-    """Decide an ambiguous answer with no model to consult.
-
-    This used to return "incorrect" unconditionally, on the reasoning that Again is the cheap
-    mistake. In practice that is far too harsh: if the judge is unreachable — or simply turned
-    off — every partially-matching answer is marked wrong, which reads as "it grades everything
-    incorrect". Splitting the ambiguous band gives the benefit of the doubt to answers that
-    were closer to right than wrong.
-    """
-    midpoint = (cfg.fuzzy_correct + cfg.fuzzy_wrong) / 2
-    return Verdict(score >= midpoint, score, "fuzzy-only", f"{why}; ambiguous band")

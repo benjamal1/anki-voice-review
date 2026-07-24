@@ -16,6 +16,7 @@ from typing import Optional
 from aqt import mw
 from aqt.qt import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -43,6 +44,7 @@ from .worker import (
     PHASE_LOADING,
     PHASE_SPEAKING,
     PHASE_STOPPED,
+    PHASE_AWAITING,
     PHASE_VERDICT,
     VoiceWorker,
 )
@@ -53,6 +55,7 @@ PHASE_TEXT = {
     PHASE_LISTENING: "Listening — say your answer, then “{terminator}”",
     PHASE_GRADING: "Grading…",
     PHASE_VERDICT: "Grade it or wait",
+    PHASE_AWAITING: "Say good or again",
     PHASE_STOPPED: "Stopped",
 }
 PHASE_COLOR = {
@@ -61,6 +64,7 @@ PHASE_COLOR = {
     PHASE_LISTENING: "#4ade80",
     PHASE_GRADING: "#f4b942",
     PHASE_VERDICT: "#c9a0ff",
+    PHASE_AWAITING: "#c9a0ff",
     PHASE_STOPPED: "#9aa7b4",
 }
 
@@ -159,13 +163,16 @@ class SettingsDialog(QDialog):
         self.override.setToolTip("How long you get to countermand the grade by voice.")
         form.addRow("Override window", self.override)
 
-        self.use_judge = QCheckBox("Use the local LLM for ambiguous answers")
-        self.use_judge.setChecked(bool(config.get("use_llm_judge", True)))
-        self.use_judge.setToolTip(
-            "When off, grading is purely mechanical: faster, but a correct answer worded\n"
-            "differently from the card will be marked wrong."
+        self.grading_mode = QComboBox()
+        self.grading_mode.addItem("Automatic — grade my answer for me", "auto")
+        self.grading_mode.addItem("Manual — read the answer, I'll say good or again", "manual")
+        current = str(config.get("grading_mode") or "auto").lower()
+        self.grading_mode.setCurrentIndex(1 if current == "manual" else 0)
+        self.grading_mode.setToolTip(
+            "Manual needs no language model at all. The card is read out, you answer, then the\n"
+            "answer is read back and it waits for you to say good or again — no time limit."
         )
-        form.addRow("", self.use_judge)
+        form.addRow("Grading", self.grading_mode)
 
         self.fuzzy_correct = QDoubleSpinBox()
         self.fuzzy_correct.setRange(0.0, 1.0)
@@ -191,6 +198,14 @@ class SettingsDialog(QDialog):
 
         self.say_rate = QLineEdit(str(config.get("say_rate", 190)))
         form.addRow("Speech rate", self.say_rate)
+
+        def sync_mode() -> None:
+            automatic = self.grading_mode.currentData() == "auto"
+            for widget in (self.fuzzy_correct, self.fuzzy_wrong, self.override, self.ollama_model):
+                widget.setEnabled(automatic)
+
+        self.grading_mode.currentIndexChanged.connect(lambda _: sync_mode())
+        sync_mode()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -229,7 +244,7 @@ class SettingsDialog(QDialog):
             {
                 "terminator": self.terminator.text().strip() or "done",
                 "override_window_seconds": self.override.value(),
-                "use_llm_judge": self.use_judge.isChecked(),
+                "grading_mode": self.grading_mode.currentData(),
                 "fuzzy_correct": self.fuzzy_correct.value(),
                 "fuzzy_wrong": self.fuzzy_wrong.value(),
                 "whisper_model": self.model_path.text().strip(),
@@ -405,9 +420,13 @@ class VoiceReviewDialog(QDialog):
                 error=True,
             )
             return
-        degraded = [c for c in checks if not c.good]
-        if degraded:
-            self._set_hint(f"{degraded[0].name}: {degraded[0].detail}. Grading by text only.")
+        if not cfg.manual:
+            degraded = [c for c in checks if not c.good]
+            if degraded:
+                self._set_hint(
+                    f"{degraded[0].name}: {degraded[0].detail}. "
+                    "Answers it cannot grade will be handed to you."
+                )
 
         self.terminator_word = cfg.terminator
         self.transcript.clear()

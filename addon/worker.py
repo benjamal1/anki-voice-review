@@ -38,6 +38,7 @@ PHASE_SPEAKING = "speaking"
 PHASE_LISTENING = "listening"
 PHASE_GRADING = "grading"
 PHASE_VERDICT = "verdict"
+PHASE_AWAITING = "awaiting"
 PHASE_STOPPED = "stopped"
 
 
@@ -188,6 +189,8 @@ class VoiceWorker(threading.Thread):
                     if self.session.phase.name == "LISTENING":
                         self.on_phase(PHASE_GRADING, "")
                     self._execute(self.session.on_line(line))
+                    if self.session.phase.name == "AWAITING_EASE":
+                        self.on_phase(PHASE_AWAITING, "")
                     if self.session.graded > before and self.session.last_verdict:
                         verdict = self.session.last_verdict
                         self.on_verdict(

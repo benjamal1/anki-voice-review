@@ -118,36 +118,36 @@ class TestBandRouting:
         assert verdict.source == "judge"
 
 
-class TestFallbacks:
-    def test_ollama_down_still_returns_a_verdict(self, cfg, no_judge):
+class TestUnresolvedInsteadOfGuessing:
+    """With no model to consult, an ambiguous answer is handed to the user rather than
+    decided automatically. Marking it incorrect punishes answers that were probably right,
+    and splitting the band by score is a coin flip wearing a threshold."""
+
+    def test_no_judge_marks_the_verdict_as_needing_a_human(self, cfg, no_judge):
         verdict = grade("q", "the powerhouse of the cell", "it makes energy for the cell", cfg)
-        assert verdict.source == "fuzzy-only"
+        assert verdict.needs_human
+        assert verdict.source == "unresolved"
 
-    def test_no_judge_splits_the_ambiguous_band_instead_of_failing_everything(self, cfg, no_judge):
-        # This used to return "incorrect" for the whole band. With the judge unreachable that
-        # marks every partial match wrong, which reads as "it grades everything incorrect".
-        midpoint = (cfg.fuzzy_correct + cfg.fuzzy_wrong) / 2
-        upper = grade("q", "the powerhouse of the cell", "it makes energy for the cell", cfg)
-        assert cfg.fuzzy_wrong <= upper.score < cfg.fuzzy_correct, "fixture must sit in the band"
-        assert upper.score >= midpoint and upper.correct
+    def test_a_clear_match_never_needs_a_human(self, cfg, no_judge):
+        assert not grade("q", "Paris", "Paris", cfg).needs_human
 
-        lower = grade("q", "the sinoatrial node of the heart", "something about the heart", cfg)
-        if lower.score < midpoint:
-            assert not lower.correct
+    def test_a_clear_miss_never_needs_a_human(self, cfg, no_judge):
+        assert not grade("q", "Paris", "photosynthesis is a process", cfg).needs_human
 
-    def test_judge_disabled_uses_the_same_split(self):
-        cfg = Config(use_judge=False)
-        # 0.556 sits inside the band and above its midpoint, so it should be given the
-        # benefit of the doubt rather than marked wrong for want of a model.
+    def test_a_judged_answer_never_needs_a_human(self, cfg, monkeypatch):
+        stub_judge(monkeypatch, True)
         verdict = grade("q", "the powerhouse of the cell", "it makes energy for the cell", cfg)
-        assert verdict.source == "fuzzy-only" and verdict.correct
+        assert not verdict.needs_human and verdict.source == "judge"
 
-    def test_malformed_reply_is_treated_as_unavailable(self, cfg, monkeypatch):
-        # ask_judge returns None for unparseable replies; grade must not raise.
-        monkeypatch.setattr(grade_mod, "ask_judge", lambda *a, **k: None)
-        verdict = grade("q", "the powerhouse of the cell", "it makes energy for the cell", cfg)
-        assert verdict.source == "fuzzy-only"
+    def test_manual_mode_never_calls_the_judge(self, monkeypatch):
+        # In manual mode the user grades every card, so consulting a model is pure latency.
+        calls = stub_judge(monkeypatch, True)
+        cfg = Config(grading_mode="manual")
+        grade("q", "the powerhouse of the cell", "it makes energy for the cell", cfg)
+        assert calls == []
 
+
+class TestJudgeErrorHandling:
     def test_ask_judge_swallows_connection_errors(self, cfg, monkeypatch):
         # ask_judge owns its own error handling. If a URLError ever leaked, the session would
         # die mid-review over a background service being down.

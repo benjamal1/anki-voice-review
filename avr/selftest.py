@@ -11,7 +11,7 @@ an existing card, and the scheduling it writes belongs entirely to notes it made
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from .anki import AnkiConnect, AnkiError
@@ -35,6 +35,8 @@ class Case:
     expect_correct: Optional[bool]
     expect_ease: Optional[int]
     note: str = ""
+    manual: bool = False
+    forbid_show_answer: bool = False
 
 
 CASES = [
@@ -98,6 +100,26 @@ CASES = [
         expect_correct=False,
         expect_ease=EASE_AGAIN,
         note="saying just the end word is the fastest hands-free way to mark a card wrong",
+    ),
+    Case(
+        label="bury never reveals the answer",
+        note_type="Basic",
+        fields={"Front": "An image card you cannot read aloud", "Back": "secret"},
+        script=["bury"],
+        expect_correct=None,
+        expect_ease=None,
+        forbid_show_answer=True,
+        note="image cards must be set aside without the answer being shown or spoken",
+    ),
+    Case(
+        label="manual mode waits for the user to grade",
+        note_type="Basic",
+        fields={"Front": "What is the speed of light?", "Back": "300,000 km/s"},
+        script=["something wrong done", "good"],
+        expect_correct=None,
+        expect_ease=EASE_GOOD,
+        manual=True,
+        note="answer is wrong, but manual mode must submit what the USER said, not a verdict",
     ),
     Case(
         label="skip advances without grading",
@@ -192,9 +214,12 @@ def run(cfg: Config, keep: bool = False) -> int:
 
         stt = ScriptedTranscriber()
         speaker = FakeSpeaker()
-        runner = Runner(cfg, anki, stt, speaker)
 
         for case in CASES:
+            # Each case may need its own grading mode, so build a runner per case rather than
+            # mutating a frozen Config.
+            case_cfg = replace(cfg, grading_mode="manual") if case.manual else cfg
+            runner = Runner(case_cfg, anki, stt, speaker)
             results.append(_run_case(runner, anki, stt, speaker, case))
     finally:
         if keep:
@@ -233,7 +258,15 @@ def _run_case(runner: Runner, anki: AnkiConnect, stt, speaker, case: Case) -> Re
     speaker.said.clear()
 
     submitted: list = []
+    revealed: list = []
     original_answer = anki.answer_card
+    original_show = anki.show_answer
+
+    def record_show() -> None:
+        revealed.append(True)
+        original_show()
+
+    anki.show_answer = record_show  # type: ignore[method-assign]
 
     def record(ease: int) -> None:
         submitted.append(ease)
@@ -252,11 +285,14 @@ def _run_case(runner: Runner, anki: AnkiConnect, stt, speaker, case: Case) -> Re
             runner._execute(session.on_override_expired())
     finally:
         anki.answer_card = original_answer  # type: ignore[method-assign]
+        anki.show_answer = original_show  # type: ignore[method-assign]
 
     elapsed = time.monotonic() - started
     verdict = session.last_verdict
 
     problems = []
+    if case.forbid_show_answer and revealed:
+        problems.append("the answer was revealed on a card that should have been buried unseen")
     if case.expect_ease is None:
         if submitted:
             problems.append(f"expected no grade, but submitted ease {submitted}")
@@ -265,6 +301,10 @@ def _run_case(runner: Runner, anki: AnkiConnect, stt, speaker, case: Case) -> Re
             problems.append("no grade was submitted")
         elif submitted[-1] != case.expect_ease:
             problems.append(f"expected ease {case.expect_ease}, got {submitted[-1]}")
+
+    if case.manual and session.last_verdict is not None:
+        if not getattr(session.last_verdict, "needs_human", False):
+            problems.append("manual mode formed an automatic verdict")
 
     if case.expect_correct is not None:
         if session.graded == graded_before:

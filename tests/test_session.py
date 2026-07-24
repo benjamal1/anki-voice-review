@@ -7,6 +7,7 @@ from avr.config import EASE_AGAIN, EASE_EASY, EASE_GOOD, EASE_HARD, Config
 from avr.grade import Verdict
 from avr.session import (
     AnswerCard,
+    BuryCard,
     NextCard,
     Phase,
     Quit,
@@ -292,3 +293,130 @@ class TestBareTerminatorMeansIDontKnow:
         s = session()
         s.on_line("done")
         assert s.last_verdict.source == "no answer"
+
+
+class TestBuryWithoutRevealing:
+    """Image cards and anything unreadable need setting aside without the answer ever being
+    shown or spoken."""
+
+    def test_bury_is_a_synonym_for_skip(self):
+        assert match_command("bury") == "bury"
+
+    def test_bury_never_shows_the_answer(self):
+        s = session()
+        intents = s.on_line("bury")
+        assert not of(intents, ShowAnswer)
+
+    def test_bury_never_speaks_the_answer(self):
+        s = session()
+        spoken = [i.text for i in of(s.on_line("bury"), Speak)]
+        assert CARD.answer not in spoken
+
+    def test_bury_sets_the_card_aside_and_advances(self):
+        s = session()
+        intents = s.on_line("bury")
+        assert of(intents, BuryCard) and of(intents, NextCard)
+
+    def test_bury_does_not_grade(self):
+        s = session()
+        s.on_line("bury")
+        assert s.graded == 0
+
+    def test_skip_still_works_and_also_never_reveals(self):
+        s = session()
+        intents = s.on_line("skip")
+        assert of(intents, BuryCard) and not of(intents, ShowAnswer)
+
+
+class TestManualMode:
+    """Manual mode never grades. It reads the answer out and waits for the user."""
+
+    def manual(self):
+        s = Session(cfg=Config(grading_mode="manual"), grade_fn=always(True))
+        s.begin_card(CARD)
+        return s
+
+    def test_it_reads_the_answer_and_waits(self):
+        s = self.manual()
+        intents = s.on_line("my attempt done")
+        assert of(intents, ShowAnswer)
+        assert CARD.answer in [i.text for i in of(intents, Speak)]
+        assert s.phase is Phase.AWAITING_EASE
+
+    def test_it_announces_no_verdict(self):
+        s = self.manual()
+        spoken = [i.text for i in of(s.on_line("my attempt done"), Speak)]
+        assert "Correct" not in spoken and "Incorrect" not in spoken
+
+    def test_it_starts_no_timer(self):
+        # A timer would reintroduce exactly the automatic default this mode exists to avoid.
+        s = self.manual()
+        assert not of(s.on_line("my attempt done"), StartOverrideTimer)
+
+    def test_nothing_happens_until_the_user_speaks(self):
+        s = self.manual()
+        s.on_line("my attempt done")
+        assert s.on_override_expired() == []
+        assert s.graded == 0
+
+    @pytest.mark.parametrize(
+        "word,ease", [("again", EASE_AGAIN), ("hard", EASE_HARD), ("good", EASE_GOOD), ("easy", EASE_EASY)]
+    )
+    def test_the_spoken_ease_is_what_gets_submitted(self, word, ease):
+        s = self.manual()
+        s.on_line("my attempt done")
+        assert of(s.on_line(word), AnswerCard)[0].ease == ease
+
+    def test_the_tally_counts_manual_grades(self):
+        s = self.manual()
+        s.on_line("done")
+        s.on_line("good")
+        assert s.graded == 1 and s.correct == 1
+
+    def test_stray_talk_while_waiting_is_ignored(self):
+        s = self.manual()
+        s.on_line("my attempt done")
+        assert s.on_line("hmm let me think about that") == []
+        assert s.phase is Phase.AWAITING_EASE
+
+    def test_repeat_rereads_the_answer_not_the_question(self):
+        s = self.manual()
+        s.on_line("done")
+        spoken = [i.text for i in of(s.on_line("repeat"), Speak)]
+        assert spoken == [CARD.answer]
+
+    def test_bury_works_while_waiting(self):
+        s = self.manual()
+        s.on_line("done")
+        intents = s.on_line("bury")
+        assert of(intents, BuryCard) and s.graded == 0
+
+    def test_quit_works_while_waiting(self):
+        s = self.manual()
+        s.on_line("done")
+        assert of(s.on_line("quit"), Quit)
+
+
+class TestUnresolvedAsksTheUser:
+    def test_an_ungradeable_answer_asks_instead_of_guessing(self):
+        def unresolved(q, a, t, cfg):
+            return Verdict(False, 0.5, "unresolved", "", needs_human=True)
+
+        s = Session(cfg=Config(), grade_fn=unresolved)
+        s.begin_card(CARD)
+        intents = s.on_line("something ambiguous done")
+
+        assert s.phase is Phase.AWAITING_EASE
+        assert not of(intents, StartOverrideTimer), "no default to fall back to"
+        assert s.graded == 0, "nothing was decided, so nothing is tallied yet"
+        assert CARD.answer in [i.text for i in of(intents, Speak)]
+
+    def test_the_user_then_decides(self):
+        def unresolved(q, a, t, cfg):
+            return Verdict(False, 0.5, "unresolved", "", needs_human=True)
+
+        s = Session(cfg=Config(), grade_fn=unresolved)
+        s.begin_card(CARD)
+        s.on_line("something ambiguous done")
+        assert of(s.on_line("good"), AnswerCard)[0].ease == EASE_GOOD
+        assert s.graded == 1 and s.correct == 1

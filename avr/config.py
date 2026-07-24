@@ -76,9 +76,17 @@ class Config:
     # --- Session ---
     terminator: str = field(default_factory=lambda: _env_str("AVR_TERMINATOR", "done"))
     override_window_s: float = field(default_factory=lambda: _env_float("AVR_OVERRIDE_WINDOW", 2.5))
-    # Turning the judge off makes grading purely mechanical: faster, and never wrong in a way
-    # you cannot predict, at the cost of marking reworded answers incorrect.
-    use_judge: bool = True
+    # "auto"   — text similarity, with the local model deciding what similarity cannot.
+    # "manual"  — never grades. Reads the answer out and waits for you to say good or again.
+    #
+    # These are the only two modes on purpose. There used to be a third, where the model was
+    # off and similarity alone decided the ambiguous middle: it guessed, and it guessed badly.
+    # With no model available the honest move is to ask the person, not to invent a verdict.
+    grading_mode: str = "auto"
+
+    @property
+    def manual(self) -> bool:
+        return self.grading_mode == "manual"
 
     @classmethod
     def from_mapping(cls, data: dict) -> "Config":
@@ -106,7 +114,7 @@ class Config:
             judge_timeout_s=float(pick("judge_timeout_seconds", defaults.judge_timeout_s)),
             terminator=str(pick("terminator", defaults.terminator)),
             override_window_s=float(pick("override_window_seconds", defaults.override_window_s)),
-            use_judge=bool(data.get("use_llm_judge", True)),
+            grading_mode=str(data.get("grading_mode") or "auto").lower(),
         )
 
     def validate(self) -> list[str]:
@@ -121,4 +129,6 @@ class Config:
             problems.append("terminator keyword must not be empty")
         if self.override_window_s < 0:
             problems.append("override window must not be negative")
+        if self.grading_mode not in ("auto", "manual"):
+            problems.append(f"grading mode must be 'auto' or 'manual', got {self.grading_mode!r}")
         return problems

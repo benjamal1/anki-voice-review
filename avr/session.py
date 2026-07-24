@@ -18,7 +18,9 @@ from .cards import Card, normalize
 from .config import EASE_AGAIN, EASE_BY_NAME, EASE_GOOD, Config
 from .grade import Verdict
 
-CONTROL_COMMANDS = frozenset({"repeat", "skip", "quit"})
+# "bury" is a synonym for "skip": both set the card aside without grading and without ever
+# revealing the answer, which is what an image card or an unreadable card needs.
+CONTROL_COMMANDS = frozenset({"repeat", "skip", "bury", "quit"})
 EASE_COMMANDS = frozenset(EASE_BY_NAME)
 ALL_COMMANDS = CONTROL_COMMANDS | EASE_COMMANDS
 
@@ -26,6 +28,7 @@ ALL_COMMANDS = CONTROL_COMMANDS | EASE_COMMANDS
 class Phase(Enum):
     LISTENING = auto()  # accumulating the spoken answer
     OVERRIDE = auto()  # verdict announced, briefly accepting a correction
+    AWAITING_EASE = auto()  # answer read out, waiting indefinitely for the user to grade it
     FINISHED = auto()
 
 
@@ -140,6 +143,8 @@ class Session:
             return []
         if self.phase is Phase.OVERRIDE:
             return self._on_line_override(line)
+        if self.phase is Phase.AWAITING_EASE:
+            return self._on_line_awaiting_ease(line)
         return self._on_line_listening(line)
 
     def on_override_expired(self) -> list[Intent]:
@@ -163,6 +168,31 @@ class Session:
             return self._grade()
         return []
 
+    def _on_line_awaiting_ease(self, line: str) -> list[Intent]:
+        """Manual grading: nothing is decided until the user says so.
+
+        No timer and no default. The whole point is that no automatic verdict is being trusted,
+        so falling back to one after a few seconds would defeat it.
+        """
+        command = match_command(line)
+        if command in EASE_COMMANDS:
+            ease = EASE_BY_NAME[command]
+            self.phase = Phase.LISTENING
+            self.graded += 1
+            if ease >= EASE_GOOD:
+                self.correct += 1
+            return [AnswerCard(ease), NextCard()]
+        if command == "quit":
+            self.phase = Phase.FINISHED
+            return [Speak("Goodbye"), Quit()]
+        if command in ("skip", "bury"):
+            self.phase = Phase.LISTENING
+            return [Speak("Skipping"), BuryCard(), NextCard()]
+        if command == "repeat":
+            # Re-read the answer, not the question — the answer is already on screen.
+            return [Speak(self.card.answer if self.card else "")]
+        return []
+
     def _on_line_override(self, line: str) -> list[Intent]:
         command = match_command(line)
         if command in EASE_COMMANDS:
@@ -179,9 +209,11 @@ class Session:
             self.phase = Phase.FINISHED
             return [Speak("Goodbye"), Quit()]
 
-        if command == "skip":
+        if command in ("skip", "bury"):
             self.phase = Phase.LISTENING
-            # Bury first: without it the loop "advances" to the card already showing and
+            # No ShowAnswer anywhere on this path: an image card or an unreadable card should
+            # be set aside without the answer ever being revealed or read out.
+            # Bury first — without it the loop "advances" to the card already showing and
             # reads it again, which is what skip used to do.
             return [Speak("Skipping"), BuryCard(), NextCard()]
 
@@ -200,11 +232,32 @@ class Session:
             self.correct += 1
         return [ShowAnswer(), AnswerCard(ease), NextCard()]
 
+    def _ask_user(self, preamble: str) -> list[Intent]:
+        """Show and read the answer, then wait for the user to grade it themselves.
+
+        Deliberately emits no StartOverrideTimer: there is no default to fall back to, so a
+        timer would just reintroduce the guess this path exists to avoid.
+        """
+        assert self.card is not None
+        self.phase = Phase.AWAITING_EASE
+        intents: list[Intent] = [ShowAnswer()]
+        if preamble:
+            intents.append(Speak(preamble))
+        intents.append(Speak(self.card.answer))
+        intents.append(Speak("Good or again?"))
+        return intents
+
     def _grade(self) -> list[Intent]:
         if self.card is None:
             return []
 
         transcript = " ".join(self.buffer).strip()
+        self.last_transcript = transcript
+
+        if self.cfg.manual:
+            # Manual mode never grades. Read the answer out, then wait — indefinitely — for the
+            # user to say how it went. No verdict is announced because none was formed.
+            return self._ask_user("")
 
         if not transcript:
             # The terminator on its own means "I don't know" — the fastest way to mark a card
@@ -218,8 +271,14 @@ class Session:
             verdict = Verdict(False, 0.0, "no answer", "nothing said before the end word")
         else:
             verdict = self.grade_fn(self.card.question, self.card.answer, transcript, self.cfg)
-        self.last_transcript = transcript
+
         self.last_verdict = verdict
+
+        if getattr(verdict, "needs_human", False):
+            # Similarity could not decide and no model was available to break the tie. Rather
+            # than invent a verdict, ask. `verdict.correct` is meaningless here.
+            return self._ask_user("I could not grade that.")
+
         self.graded += 1
         if verdict.correct:
             self.correct += 1
