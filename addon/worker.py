@@ -68,6 +68,7 @@ class VoiceWorker(threading.Thread):
 
         self._stop = threading.Event()
         self._override_deadline: Optional[float] = None
+        self._last_card_id = 0
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -105,6 +106,12 @@ class VoiceWorker(threading.Thread):
                 return
 
     def _advance(self) -> list:
+        # Answering is asynchronous; without waiting for the reviewer to present a fresh
+        # question we read back the card just answered and speak it again.
+        if not self.bridge.wait_for_question():
+            self.tts.speak("Deck finished", gate=self.stt)
+            self._stop.set()
+            return []
         try:
             card = self.bridge.current_card()
         except NoCardShowing:
@@ -116,8 +123,15 @@ class VoiceWorker(threading.Thread):
             self._stop.set()
             return []
 
+        repeat = card.card_id == self._last_card_id
+        self._last_card_id = card.card_id
         self.on_card(card.question)
-        return self.session.begin_card(card)
+        intents = self.session.begin_card(card)
+        if repeat:
+            # A lapsed card really can come straight back. Say so, otherwise it is
+            # indistinguishable from the bug where the loop re-read a stale card.
+            return [Speak("Again")] + intents
+        return intents
 
     # --- main loop ---
 
@@ -157,6 +171,17 @@ class VoiceWorker(threading.Thread):
                         self.on_verdict(verdict.correct, verdict.score, verdict.source)
                         self.on_phase(PHASE_VERDICT, "")
                     continue
+
+                if not self.stt.is_alive():
+                    # whisper-stream exits immediately when the microphone is denied, which is
+                    # exactly what happens before the macOS permission prompt is answered.
+                    # Without this the window sits on "Listening…" forever.
+                    self.on_error(
+                        "whisper-stream stopped. If macOS asked for microphone access, allow it "
+                        "in System Settings → Privacy & Security → Microphone (grant it to Anki), "
+                        "then press Start again."
+                    )
+                    break
 
                 if self._override_deadline and time.monotonic() >= self._override_deadline:
                     self._override_deadline = None

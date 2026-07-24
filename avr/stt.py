@@ -36,6 +36,27 @@ NOISE_LINES = {
 }
 NON_SPEECH = re.compile(r"^\s*[\[(][^\])]*[\])]\s*$")
 
+# whisper-stream's own chatter, not speech. In VAD mode (--step 0) every utterance is wrapped:
+#     ### Transcription 1 START | t0 = 0 ms | t1 = 3000 ms
+#     the capital is paris
+#     ### Transcription 1 END
+# Passing those markers through appends "Transcription 1 START t0 0 ms" to every answer, which
+# wrecks the fuzzy score and pushes every card to the judge or to a wrong verdict.
+CONTROL_LINE = re.compile(r"^\s*(###|\[Start speaking\]|whisper_|main:|init:)", re.IGNORECASE)
+
+# base.en emits these on silence — an artifact of its training data, not something you said.
+# Only ever matched as a whole line, so a card whose answer really is "you" still works when
+# spoken as part of a sentence.
+HALLUCINATED_SILENCE = {
+    "you",
+    "thank you.",
+    "thank you",
+    "thanks for watching!",
+    "thanks for watching.",
+    "bye.",
+    ".",
+}
+
 
 # A GUI app launched from Finder inherits a minimal PATH — no /opt/homebrew/bin — so inside the
 # Anki add-on `shutil.which("whisper-stream")` finds nothing even though it is installed. Look in
@@ -62,7 +83,12 @@ def clean_line(raw: str) -> str:
     text = ANSI.sub("", raw).strip()
     if not text:
         return ""
-    if text.lower() in NOISE_LINES or NON_SPEECH.match(text):
+    if CONTROL_LINE.match(text):
+        return ""
+    lowered = text.lower()
+    if lowered in NOISE_LINES or lowered in HALLUCINATED_SILENCE:
+        return ""
+    if NON_SPEECH.match(text):
         return ""
     return text
 
@@ -141,6 +167,16 @@ class Transcriber:
         except queue.Empty:
             return None
 
+    def is_alive(self) -> bool:
+        """False once the whisper process has exited.
+
+        Worth checking every tick: if the microphone is denied — which is exactly what happens
+        the first time before the macOS permission prompt is answered — whisper-stream exits
+        immediately. Without this the UI sits on "Listening…" forever and looks like the mic
+        simply is not picking anything up.
+        """
+        return self._process is not None and self._process.poll() is None
+
     def drain(self) -> int:
         """Discard everything currently queued. Returns how many lines were dropped.
 
@@ -202,3 +238,6 @@ class FakeTranscriber:
     def drain(self) -> int:
         self.drained += 1
         return 0
+
+    def is_alive(self) -> bool:
+        return True

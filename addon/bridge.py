@@ -14,6 +14,7 @@ collection from a background thread corrupts state in ways that surface much lat
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Callable, Optional
 
 from aqt import mw
@@ -111,6 +112,38 @@ class AnkiBridge:
             reviewer._answerCard(min(ease, buttons))
 
         run_on_main(answer)
+
+    def reviewer_state(self) -> Optional[str]:
+        """'question', 'answer', or None when not reviewing."""
+
+        def read() -> Optional[str]:
+            if not self._review_active():
+                return None
+            return getattr(self._reviewer(), "state", None)
+
+        return run_on_main(read)
+
+    def wait_for_question(self, timeout: float = 5.0, poll: float = 0.03) -> bool:
+        """Block until the reviewer is showing a fresh question.
+
+        Answering is asynchronous — in Anki 25.x `_answerCard` goes through an undoable
+        operation, so it returns before the next card is on screen. Reading the card straight
+        afterwards hands back the one just answered, and the loop re-speaks and re-grades it.
+
+        Waiting on the reviewer's own state is the correct signal rather than watching for the
+        card id to change: a lapsed card genuinely comes back as the very next card, and an
+        id-based wait cannot tell that apart from a stale read except by stalling until it
+        times out.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self.reviewer_state()
+            if state is None:
+                return False  # deck finished, or review was exited
+            if state == "question":
+                return True
+            time.sleep(poll)
+        return self.reviewer_state() == "question"
 
     def preflight(self) -> Card:
         return self.current_card()

@@ -82,6 +82,25 @@ class Runner:
                 self._running = False
                 return
 
+    def _wait_for_new_card(self, timeout: float = 3.0, poll: float = 0.05) -> None:
+        """Give Anki a moment to present the next card before reading it.
+
+        The add-on can watch `reviewer.state` directly; over AnkiConnect the card id is the
+        only signal available, so a lapsed card that legitimately comes straight back will
+        wait out the timeout. That is the cost of not being in-process.
+        """
+        previous = self.session.card.card_id if self.session.card else 0
+        if not previous:
+            return
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if self.anki.current_card().card_id != previous:
+                    return
+            except AnkiError:
+                return
+            time.sleep(poll)
+
     def _record_timing(self) -> None:
         if not self._card_started:
             return
@@ -96,6 +115,9 @@ class Runner:
         self._card_started = 0.0
 
     def _advance(self) -> list[Intent]:
+        # guiAnswerCard returns before the reviewer has swapped in the next card, so reading
+        # immediately hands back the card just answered and the loop re-speaks it.
+        self._wait_for_new_card()
         try:
             card = self.anki.current_card()
         except NoCardShowing:
