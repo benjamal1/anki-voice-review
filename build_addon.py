@@ -34,7 +34,16 @@ NAME = "Voice Review"
 
 # Modules shared with the CLI. `anki.py` (the AnkiConnect client), `runner.py`, and `cli.py`
 # are deliberately excluded: inside Anki the add-on talks to the reviewer directly.
-VENDORED = ["__init__.py", "cards.py", "config.py", "grade.py", "session.py", "stt.py", "tts.py"]
+VENDORED = [
+    "__init__.py",
+    "cards.py",
+    "config.py",
+    "diagnostics.py",
+    "grade.py",
+    "session.py",
+    "stt.py",
+    "tts.py",
+]
 
 ANKI_PYTHON = "3.9"
 

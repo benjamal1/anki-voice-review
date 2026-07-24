@@ -59,8 +59,12 @@ class Config:
     echo_tail_s: float = field(default_factory=lambda: _env_float("AVR_ECHO_TAIL", 0.35))
 
     # --- Grading ---
-    fuzzy_correct: float = field(default_factory=lambda: _env_float("AVR_FUZZY_CORRECT", 0.75))
-    fuzzy_wrong: float = field(default_factory=lambda: _env_float("AVR_FUZZY_WRONG", 0.40))
+    # Defaults deliberately lenient. Speech recognition mangles words, people phrase answers
+    # differently every time, and a false "incorrect" costs a real repetition of a card the
+    # user actually knew. A false "correct" only costs one slightly-early interval, and the
+    # spoken override window is there to catch it.
+    fuzzy_correct: float = field(default_factory=lambda: _env_float("AVR_FUZZY_CORRECT", 0.62))
+    fuzzy_wrong: float = field(default_factory=lambda: _env_float("AVR_FUZZY_WRONG", 0.30))
     ollama_url: str = field(
         default_factory=lambda: _env_str("AVR_OLLAMA_URL", "http://127.0.0.1:11434")
     )

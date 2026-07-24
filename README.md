@@ -1,143 +1,205 @@
-# anki-voice-review
+# Voice Review for Anki
 
-Hands-free voice review for Anki. Speak your answer, get graded, next card. No keyboard, no
-mouse, no screen.
+Review Anki by voice. The card is read aloud, you say your answer, it grades you and moves on.
+No keyboard, no mouse, no screen.
 
-Everything runs locally on the Mac: Anki, the microphone, whisper.cpp, `say`, and Ollama.
-Nothing leaves the machine and there is no cloud service anywhere in the loop.
+Everything runs locally on your Mac. Nothing is sent anywhere.
 
-Ships as an **Anki add-on** with a UI. There is also a CLI for testing and scripting.
+---
 
-## Install the add-on
+## What this add-on does and does not include
 
-1. Build it (or use a prebuilt `dist/anki-voice-review.ankiaddon`):
+**The add-on is pure Python.** Anki add-ons cannot bundle native programs or large model
+files, so this one does not ship a speech engine. It drives three things that live on your Mac:
 
-   ```sh
-   python3 build_addon.py
-   ```
+| Piece | Where it comes from | Required? |
+|---|---|---|
+| **Reading cards aloud** | `say`, built into macOS | Included with macOS — nothing to install |
+| **Hearing your answer** | **whisper.cpp**, installed separately via Homebrew, plus a ~141 MB model file you download once | **Required.** Without it there is no speech recognition and the add-on cannot work |
+| **Smarter grading** | **Ollama**, installed separately | **Optional.** Without it, answers are graded by text similarity alone |
 
-2. In Anki: **Tools → Add-ons → Install from file…**, pick
-   `dist/anki-voice-review.ankiaddon`, then restart Anki.
+If you install nothing, the add-on will tell you what is missing and how to get it —
+**Tools → Voice Review → Settings**, top panel. It re-checks on demand and refuses to start a
+review while something required is missing, rather than failing strangely mid-session.
 
-3. Open a deck and click **Study Now**, then **Tools → Voice Review** (`Ctrl+Shift+V`) and
-   press **Start**.
+---
 
-The first run triggers a macOS microphone prompt on Anki's behalf. Allow it once. Anki already
-declares microphone usage and holds the `com.apple.security.device.audio-input` entitlement, so
-the `whisper-stream` process it spawns inherits that grant.
+## Setup
 
-Settings live in the window itself (**Settings…**) and in **Tools → Add-ons → Config**.
+### 1. Install the add-on
 
-## Requirements
+Download `anki-voice-review.ankiaddon` from the
+[latest release](https://github.com/benjamal1/anki-voice-review/releases), then in Anki:
 
-macOS, plus:
+**Tools → Add-ons → Install from file…** → pick the file → **restart Anki**.
 
-| Thing | Install |
+Or build it yourself:
+
+```sh
+git clone https://github.com/benjamal1/anki-voice-review.git
+cd anki-voice-review
+python3 build_addon.py     # writes dist/anki-voice-review.ankiaddon
+```
+
+### 2. Install whisper.cpp (required)
+
+This is the speech recogniser. It runs entirely on your machine.
+
+```sh
+brew install whisper-cpp
+```
+
+No Homebrew? Install it first from [brew.sh](https://brew.sh).
+
+### 3. Download the speech model (required)
+
+One file, about 141 MB, downloaded once.
+
+```sh
+mkdir -p ~/whisper-models
+curl -L -o ~/whisper-models/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+```
+
+Want better accuracy and can accept a little more delay? Download `ggml-small.en.bin` from the
+same place and point **Settings → Whisper model** at it.
+
+### 4. Install Ollama (optional, recommended)
+
+Without this, grading compares your words to the card's words as text. That works well for
+short factual answers, but marks a correct answer wrong when you phrase it very differently.
+Ollama adds a local language model that judges meaning, and it only runs on the answers text
+matching could not settle.
+
+Download from [ollama.com](https://ollama.com), open the app, then:
+
+```sh
+ollama pull qwen2.5:3b
+```
+
+Typical delay when it is consulted: about half a second.
+
+### 5. Grant microphone access
+
+Open a deck, click **Study Now**, then **Tools → Voice Review** and press **Start**. macOS will
+ask for microphone permission **on Anki's behalf** the first time. Allow it.
+
+If you miss the prompt: **System Settings → Privacy & Security → Microphone → enable Anki**,
+then restart Anki.
+
+---
+
+## Using it
+
+Open a deck, click **Study Now**, then **Tools → Voice Review** (or `Ctrl+Shift+V`) and press
+**Start**.
+
+The card is read out. Say your answer, then say **"done"**. You hear "correct" or "incorrect",
+and on a wrong answer the correct answer is read back. There is then a short window to change
+the grade by voice before it is submitted.
+
+| Say | What happens |
 |---|---|
-| Anki + AnkiConnect add-on | already installed |
-| whisper.cpp | `brew install whisper-cpp` |
-| A whisper model | `mkdir -p ~/whisper-models && curl -L -o ~/whisper-models/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin` |
-| Ollama + a judge model | Ollama.app, then `ollama pull qwen2.5:3b` |
+| your answer, then **done** | grade it |
+| **again** / **hard** / **good** / **easy** | set the grade yourself — during the override window, or instead of answering |
+| **repeat** | read the card again, discard what you had said |
+| **skip** | bury the card and move on, no grade |
+| **quit** | end the session |
 
-`say` is built into macOS. There are no Python dependencies.
+**Stop** ends the session immediately, cutting off mid-sentence if it is talking.
 
-```sh
-uv sync
-uv run avr doctor    # checks all of the above and tells you how to fix what's missing
-```
+### If a grade looks wrong
 
-## Use
+The window shows what it actually heard next to every verdict. Most surprising grades are
+mis-hearings, not mis-grading. If the transcript is right but the grade is wrong, lower
+**Settings → Correct at or above**.
 
-In the add-on window, press **Start**. Or from the CLI, **in Terminal.app on the Mac** (not over
-SSH — macOS will not grant microphone access to an SSH session):
+---
 
-```sh
-uv run avr review
-```
+## Settings
 
-Speak your answer, then say **"done"**. You will hear "correct" or "incorrect", and on a wrong
-answer the right answer is read back. There is then a brief window to override the grade by
-voice before it is submitted.
+**Tools → Voice Review → Settings**, or **Tools → Add-ons → Voice Review → Config**.
 
-| Say | Effect |
-|---|---|
-| *your answer*, then `done` | grade it |
-| `again` / `hard` / `good` / `easy` | set the ease yourself — during the override window, or instead of answering |
-| `repeat` | re-read the card, discard the partial answer |
-| `skip` | next card, no grade |
-| `quit` | end the session |
+| Setting | Default | What it does |
+|---|---|---|
+| End-of-answer word | `done` | the word that finishes your answer |
+| Override window | 2.5 s | how long you get to change the grade by voice |
+| Use the local LLM | on | judge meaning on answers text matching cannot settle |
+| Correct at or above | 0.62 | similarity needed to be marked correct outright. Lower = more lenient |
+| Incorrect below | 0.30 | similarity below which it is marked wrong outright |
+| Whisper model | `~/whisper-models/ggml-base.en.bin` | swap in `small.en` for accuracy over speed |
+| Judge model | `qwen2.5:3b` | any model you have pulled in Ollama |
+| Voice / Speech rate | system default / 190 | any voice from System Settings → Spoken Content |
 
-The first run will trigger a macOS microphone permission prompt. That is a one-time manual
-step and cannot be scripted away.
+Grading is deliberately lenient. A wrong "incorrect" makes you repeat a card you knew; a wrong
+"correct" costs one slightly early interval, and you can override it by voice.
 
-### Other commands
-
-```sh
-uv run avr peek                        # what the grader sees for the current card
-uv run avr peek --raw                  # ...plus the raw HTML
-uv run avr grade "Paris" "it's Paris"  # grade a transcript, no mic needed
-uv run avr listen                      # live transcription + echo gate test
-```
+---
 
 ## How grading works
 
-Two stages, cheapest first, because latency is the point.
+Two stages, cheapest first.
 
-1. **Fuzzy match.** Similarity between what you said and the card's answer. Takes the better of
-   whole-string similarity and word-window containment, so answering "the capital is Paris"
-   against a card that says "Paris" is not punished for the extra words.
-2. **LLM judge.** Only when the fuzzy score lands in the ambiguous middle band does a local
-   `qwen2.5:3b` call decide. Measured at 0.3–0.6s warm. If Ollama is down or replies with
-   something unparseable, the fuzzy verdict stands and the session carries on.
+1. **Text similarity.** Your words against the card's answer, taking the better of whole-answer
+   similarity and best-phrase-within-the-sentence. So "the capital is Paris" scores full marks
+   against a card that just says "Paris". Mathematical notation is expanded to how it is
+   spoken, so `2^K` matches "two to the power of K".
+2. **The local model**, only when similarity lands in the middle and cannot decide. If Ollama
+   is unavailable, the middle band is split rather than failed, and reviewing continues.
 
-Most cards never reach stage 2.
+Most answers never reach stage 2.
 
-Cloze cards grade against the deletion only, not the whole sentence — you are judged on the
-hidden part, not the sentence you were just read. Basic cards grade against the back field.
+**Cloze cards** grade against the deleted text only, not the whole sentence — including
+deletions inside MathJax, where Anki marks up nothing and the deletion has to be recovered by
+comparing the two sides of the card.
 
-## Configuration
+Card styling, scheduling widgets like the FSRS Helper's status line, and media references are
+stripped before anything is read aloud or graded.
 
-Every knob is an environment variable with a sensible default. The ones worth touching:
+---
 
-| Variable | Default | What it does |
-|---|---|---|
-| `AVR_TERMINATOR` | `done` | the word that ends your answer |
-| `AVR_FUZZY_CORRECT` | `0.75` | at or above this, correct without an LLM call |
-| `AVR_FUZZY_WRONG` | `0.40` | below this, incorrect without an LLM call |
-| `AVR_OVERRIDE_WINDOW` | `2.5` | seconds to countermand the grade by voice |
-| `AVR_SAY_RATE` | `190` | speech rate |
-| `AVR_OLLAMA_MODEL` | `qwen2.5:3b` | the judge |
-| `AVR_WHISPER_MODEL` | `~/whisper-models/ggml-base.en.bin` | swap in `small.en` for better accuracy, worse latency |
+## Troubleshooting
 
-## Design notes
+| Symptom | Cause |
+|---|---|
+| Everything is graded incorrect | Usually the microphone. Check the transcript shown next to the verdict — if it is empty or garbled, whisper is not hearing you. Grant Anki microphone access. |
+| Sits on "Listening…" and nothing happens | `whisper-stream` exited, almost always a denied microphone. The window will say so. |
+| It transcribes its own voice | Raise **echo tail** in the add-on config. Headphones also solve it. |
+| "Not ready" when pressing Start | Something required is missing — Settings shows which, and how to fix it. |
+| Nothing happens after Stop then Start | Fixed in current versions. If it recurs, close and reopen the window. |
 
-**The echo gate.** The microphone is open for the whole session, so without special handling
-the synthesised card audio gets transcribed as if you had said it — on every card, not as an
-edge case. Two defences: `say` runs to completion before listening resumes, and the transcript
-backlog is discarded afterwards, since whisper buffers audio and can emit lines from the TTS
-after `say` has already exited.
+---
 
-**Commands match whole utterances only.** A card whose answer is "good cholesterol" must not
-submit a grade halfway through your sentence.
-
-**The state machine is the test seam.** `session.py` consumes transcript lines and emits
-intents; it never touches audio, Anki, or the network. That is where the tests concentrate.
-`runner.py` is the thin part that performs the I/O.
+## Development
 
 ```sh
-uv run pytest         # no hardware or network required
-python3 build_addon.py  # also syntax-checks every vendored module against Python 3.9
+uv sync
+uv run pytest             # unit tests, no hardware or network needed
+python3 build_addon.py    # build the .ankiaddon (checks Python 3.9 compatibility)
 ```
 
-**The add-on targets Python 3.9.** Anki 25.02.5 bundles it, so `X | Y` unions at runtime and
-other 3.10+ syntax fail to load. The build script compiles every vendored module with a real
-3.9 interpreter and refuses to package if anything would not parse.
+There is also a command-line version for testing without the add-on:
 
-**Anki work happens on the GUI thread.** The voice loop runs on a worker thread; every reviewer
-call is marshalled back via `mw.taskman.run_on_main`. Touching the collection from a background
-thread corrupts state in ways that surface much later.
+```sh
+uv run avr doctor    # check every prerequisite
+uv run avr peek      # what the grader sees for the current card
+uv run avr grade "Paris" "the capital is Paris"
+uv run avr selftest  # drive the whole loop against live Anki, no mic needed
+```
 
-## Not supported
+`avr selftest` creates a throwaway deck, runs the real loop against it with a scripted
+transcript, and deletes the deck. It is how the loop gets tested without a microphone.
 
-iOS/AnkiMobile (closed source, no AnkiConnect equivalent), note types beyond Basic and Cloze,
-and any non-macOS host.
+**The add-on targets Python 3.9**, the version Anki bundles. The build refuses to package
+anything that would not parse there. Anki work happens on the GUI thread; the voice loop runs
+on a worker thread and marshals every reviewer call back via `mw.taskman.run_on_main`.
+
+---
+
+## Requirements
+
+macOS, Anki 2.1.50+. Not available for AnkiMobile or AnkiDroid — the add-on system is
+desktop-only.
+
+Note types beyond Basic and Cloze are not specifically handled and may grade against more text
+than intended.

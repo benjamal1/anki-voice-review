@@ -34,73 +34,37 @@ def _setup_logging(verbose: bool) -> None:
 
 def cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
     """Check everything the review loop depends on, and say exactly how to fix each gap."""
-    problems: list[str] = []
-
-    def report(name: str, ok: bool, detail: str = "") -> None:
-        print(f"[{OK if ok else BAD}] {name}{'  — ' + detail if detail else ''}")
-
-    for issue in cfg.validate():
-        problems.append(f"config: {issue}")
-        report("config", False, issue)
-    if not cfg.validate():
-        report("config", True)
+    from .diagnostics import blocking_problems, run_all
 
     if sys.platform != "darwin":
-        report("platform", False, f"{sys.platform}, but this runs on macOS only")
-        problems.append(
-            "This must run on the Mac. Anki, the microphone, whisper.cpp, `say`, and Ollama "
+        print(f"[{BAD}] platform — {sys.platform}, but this runs on macOS only")
+        print(
+            "\nThis must run on the Mac. Anki, the microphone, whisper.cpp, `say`, and Ollama\n"
             "all live there; the OptiPlex is the development box only."
         )
+        return 1
 
-    try:
-        Transcriber(args_binary := cfg.whisper_bin, cfg.whisper_model).preflight()
-        report("whisper-stream", True, f"{args_binary}, model {cfg.whisper_model.name}")
-    except TranscriberError as exc:
-        report("whisper-stream", False)
-        problems.append(str(exc))
+    problems = cfg.validate()
+    print(f"[{OK if not problems else BAD}] config" + (f"  — {problems[0]}" if problems else ""))
 
-    try:
-        Speaker().preflight()
-        report("say", True)
-    except SpeakerError as exc:
-        report("say", False)
-        problems.append(str(exc))
+    checks = run_all(cfg, include_anki=AnkiConnect(cfg.anki_url))
+    for check in checks:
+        mark = OK if check.good else BAD
+        print(f"[{mark}] {check.name}" + (f"  — {check.detail}" if check.detail else ""))
 
-    anki = AnkiConnect(cfg.anki_url)
-    try:
-        card = anki.preflight()
-        report("Anki reviewer", True, f"card {card.card_id} showing")
-    except AnkiError as exc:
-        report("Anki reviewer", False)
-        problems.append(str(exc))
-
-    try:
-        import json
-        import urllib.request
-
-        with urllib.request.urlopen(f"{cfg.ollama_url}/api/tags", timeout=3) as response:
-            tags = json.loads(response.read().decode())
-        names = {m.get("name", "") for m in tags.get("models", [])}
-        if cfg.ollama_model in names:
-            report("Ollama judge", True, cfg.ollama_model)
-        else:
-            report("Ollama judge", False, f"{cfg.ollama_model} not pulled")
-            problems.append(
-                f"Judge model missing. Run: ollama pull {cfg.ollama_model}\n"
-                "  (Reviews still work without it — ambiguous answers just fall back to fuzzy.)"
-            )
-    except Exception as exc:  # noqa: BLE001 - doctor reports, never raises
-        report("Ollama judge", False, str(exc))
-        problems.append(
-            f"Could not reach Ollama at {cfg.ollama_url}. Start the Ollama app.\n"
-            "  (Reviews still work without it — ambiguous answers just fall back to fuzzy.)"
-        )
-
-    if problems:
+    broken = [c for c in checks if not c.good]
+    if broken or problems:
         print("\nTo fix:\n")
         for problem in problems:
-            print(f"  - {problem}\n")
-        return 1
+            print(f"  - config: {problem}\n")
+        for check in broken:
+            print(f"  - {check.name}: {check.detail}")
+            if check.fix:
+                for line in check.fix.splitlines():
+                    print(f"      {line}")
+            print()
+        return 1 if (blocking_problems(checks) or problems) else 0
+
     print("\nAll good. Run `avr review` to start.")
     return 0
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 import time
 from typing import Optional, Protocol
 
@@ -39,6 +40,28 @@ class Speaker:
         self._rate = rate
         self._echo_tail_s = echo_tail_s
         self.muted_until = 0.0
+        self._process: Optional[subprocess.Popen] = None
+        self._cancelled = False
+        self._lock = threading.Lock()
+
+    def interrupt(self) -> None:
+        """Cut off whatever is being said, right now.
+
+        Pressing Stop mid-sentence should stop the sentence. `say` on a long card can run for
+        many seconds, and without this the worker sits blocked inside it, ignoring the stop
+        flag until it finishes — which also delays releasing the microphone, so a restart
+        finds whisper still holding it.
+        """
+        with self._lock:
+            self._cancelled = True
+            process = self._process
+        if process and process.poll() is None:
+            process.terminate()
+
+    def resume(self) -> None:
+        """Clear a previous interrupt so the speaker can be used again."""
+        with self._lock:
+            self._cancelled = False
 
     def preflight(self) -> None:
         if resolve_binary("say") is None:
@@ -63,16 +86,36 @@ class Speaker:
         text = (text or "").strip()
         if not text:
             return
+        with self._lock:
+            if self._cancelled:
+                return  # stop was pressed; do not start a new sentence
 
         self.muted_until = time.monotonic() + self._echo_tail_s
         try:
-            subprocess.run(self._command(text), check=True, capture_output=True)
+            # Popen rather than run() so interrupt() has something to terminate.
+            process = subprocess.Popen(
+                self._command(text), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            )
         except FileNotFoundError as exc:
             raise SpeakerError("`say` not found; this project runs on macOS only") from exc
-        except subprocess.CalledProcessError as exc:
+
+        with self._lock:
+            self._process = process
+        try:
+            process.wait()
+        finally:
+            with self._lock:
+                self._process = None
+
+        if process.returncode not in (0, -15, -9):  # -15/-9 are our own terminate/kill
             # A failed TTS call should not end a review session — the user can still read the
             # screen. Log it and carry on.
-            log.warning("say failed: %s", exc.stderr.decode(errors="replace").strip())
+            stderr = (process.stderr.read() if process.stderr else b"") or b""
+            log.warning("say failed: %s", stderr.decode(errors="replace").strip())
+
+        with self._lock:
+            if self._cancelled:
+                return  # skip the echo tail; nothing is playing to echo
 
         # Audio keeps arriving at the mic for a moment after the process exits.
         remaining = self.muted_until - time.monotonic()
@@ -94,12 +137,19 @@ class FakeSpeaker:
     def __init__(self) -> None:
         self.said: list[str] = []
         self.muted_until = 0.0
+        self.interrupted = False
+
+    def interrupt(self) -> None:
+        self.interrupted = True
+
+    def resume(self) -> None:
+        self.interrupted = False
 
     def preflight(self) -> None: ...
 
     def speak(self, text: str, gate: Drainable | None = None) -> None:
         text = (text or "").strip()
-        if not text:
+        if not text or self.interrupted:
             return
         self.said.append(text)
         if gate is not None:

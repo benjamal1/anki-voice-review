@@ -150,8 +150,12 @@ def correct_threshold(answer: str, cfg: Config) -> float:
 
     Terse answers get a stricter bar — see SHORT_ANSWER_CORRECT. Counted on the raw answer,
     before notation expansion, because "2^K" is one idea however many words it expands into.
+
+    Only applied when the judge is actually available. The strict bar exists to *route* a
+    close-but-maybe-wrong short answer to the judge; with no judge to route to, raising the bar
+    just marks more things wrong, which is the opposite of what it is for.
     """
-    if len(answer.split()) <= SHORT_ANSWER_TOKENS:
+    if cfg.use_judge and len(answer.split()) <= SHORT_ANSWER_TOKENS:
         return max(cfg.fuzzy_correct, SHORT_ANSWER_CORRECT)
     return cfg.fuzzy_correct
 
@@ -167,11 +171,22 @@ def grade(question: str, answer: str, transcript: str, cfg: Config) -> Verdict:
         return Verdict(False, score, "fuzzy", "clearly different")
 
     if not cfg.use_judge:
-        return Verdict(False, score, "fuzzy-only", "judge disabled, ambiguous band")
+        return _without_judge(score, cfg, "judge disabled")
 
     judged = ask_judge(question, answer, transcript, cfg)
     if judged is None:
-        # Nothing better available. Bias the ambiguous band toward "wrong" so a card you may
-        # not know does not get pushed weeks out on a coin flip; Again is the cheap mistake.
-        return Verdict(False, score, "fuzzy-fallback", "judge unavailable, ambiguous band")
+        return _without_judge(score, cfg, "judge unavailable")
     return Verdict(judged, score, "judge", "semantic verdict")
+
+
+def _without_judge(score: float, cfg: Config, why: str) -> Verdict:
+    """Decide an ambiguous answer with no model to consult.
+
+    This used to return "incorrect" unconditionally, on the reasoning that Again is the cheap
+    mistake. In practice that is far too harsh: if the judge is unreachable — or simply turned
+    off — every partially-matching answer is marked wrong, which reads as "it grades everything
+    incorrect". Splitting the ambiguous band gives the benefit of the doubt to answers that
+    were closer to right than wrong.
+    """
+    midpoint = (cfg.fuzzy_correct + cfg.fuzzy_wrong) / 2
+    return Verdict(score >= midpoint, score, "fuzzy-only", f"{why}; ambiguous band")

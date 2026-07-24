@@ -119,6 +119,7 @@ class Session:
     buffer: list[str] = field(default_factory=list)
     pending_ease: int = EASE_GOOD
     last_verdict: Verdict | None = None
+    last_transcript: str = ""
     graded: int = 0
     correct: int = 0
 
@@ -129,6 +130,7 @@ class Session:
         self.buffer = []
         self.phase = Phase.LISTENING
         self.last_verdict = None
+        self.last_transcript = ""
         return [Speak(card.question)]
 
     # --- events ---
@@ -203,7 +205,16 @@ class Session:
             return []
 
         transcript = " ".join(self.buffer).strip()
+
+        if not transcript:
+            # Grading silence always yields 0.0, i.e. "incorrect". If the microphone is not
+            # working, or the echo gate swallowed the answer, every card would be marked wrong
+            # with no clue why. Say so and keep listening instead of scheduling a lapse.
+            self.phase = Phase.LISTENING
+            return [Speak("I did not catch that. Try again.")]
+
         verdict = self.grade_fn(self.card.question, self.card.answer, transcript, self.cfg)
+        self.last_transcript = transcript
         self.last_verdict = verdict
         self.graded += 1
         if verdict.correct:

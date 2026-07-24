@@ -21,6 +21,7 @@ from aqt.qt import (
     QDoubleSpinBox,
     QFont,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,10 +30,12 @@ from aqt.qt import (
     QSizePolicy,
     Qt,
     QVBoxLayout,
+    QWidget,
     pyqtSignal,
 )
 
 from .avr.config import Config
+from .avr.diagnostics import FAIL, OK, WARN, blocking_problems, run_all
 from .bridge import AnkiBridge
 from .worker import (
     PHASE_GRADING,
@@ -62,12 +65,84 @@ PHASE_COLOR = {
 }
 
 
+STATUS_ICON = {OK: "●", WARN: "▲", FAIL: "✕"}
+STATUS_COLOR = {OK: "#4ade80", WARN: "#f4b942", FAIL: "#ff6b6b"}
+
+
+class StatusPanel(QWidget):
+    """Live view of the external programs this add-on depends on.
+
+    None of them ship with the add-on — Anki add-ons are pure Python and cannot bundle native
+    binaries or a 141 MB model — so whether each one is actually installed and running belongs
+    on screen, not in a README.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._layout = QVBoxLayout()
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        title = QLabel("<b>Required programs</b>")
+        self.recheck_button = QPushButton("Re-check")
+        self.recheck_button.setFixedWidth(90)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.recheck_button)
+        self._layout.addLayout(header)
+
+        self.rows = QVBoxLayout()
+        self.rows.setSpacing(4)
+        self._layout.addLayout(self.rows)
+
+        self.fixes = QPlainTextEdit()
+        self.fixes.setReadOnly(True)
+        self.fixes.setMaximumHeight(140)
+        self.fixes.setVisible(False)
+        self.fixes.setStyleSheet("font-family: monospace; font-size: 11px;")
+        self._layout.addWidget(self.fixes)
+
+        self.setLayout(self._layout)
+        self.recheck_button.clicked.connect(self.refresh)
+
+    def refresh(self, config: dict | None = None) -> None:
+        while self.rows.count():
+            item = self.rows.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        cfg = Config.from_mapping(config if config is not None else self._current_config())
+        checks = run_all(cfg)
+
+        fixes = []
+        for check in checks:
+            row = QLabel(
+                f'<span style="color:{STATUS_COLOR[check.status]}">{STATUS_ICON[check.status]}</span> '
+                f"<b>{check.name}</b> — {check.detail}"
+            )
+            row.setWordWrap(True)
+            self.rows.addWidget(row)
+            if not check.good and check.fix:
+                fixes.append(f"{check.name}:\n{check.fix}")
+
+        if fixes:
+            self.fixes.setPlainText("\n\n".join(fixes))
+            self.fixes.setVisible(True)
+        else:
+            self.fixes.setVisible(False)
+
+    def _current_config(self) -> dict:
+        return mw.addonManager.getConfig(__name__.split(".")[0]) or {}
+
+
 class SettingsDialog(QDialog):
     """Everything in config.json, with the two that matter most at the top."""
 
     def __init__(self, parent, config: dict) -> None:
         super().__init__(parent)
         self.setWindowTitle("Voice Review — Settings")
+        self.setMinimumWidth(520)
         self.config = dict(config)
 
         form = QFormLayout()
@@ -95,13 +170,13 @@ class SettingsDialog(QDialog):
         self.fuzzy_correct = QDoubleSpinBox()
         self.fuzzy_correct.setRange(0.0, 1.0)
         self.fuzzy_correct.setSingleStep(0.05)
-        self.fuzzy_correct.setValue(float(config.get("fuzzy_correct", 0.75)))
+        self.fuzzy_correct.setValue(float(config.get("fuzzy_correct", Config().fuzzy_correct)))
         form.addRow("Correct at or above", self.fuzzy_correct)
 
         self.fuzzy_wrong = QDoubleSpinBox()
         self.fuzzy_wrong.setRange(0.0, 1.0)
         self.fuzzy_wrong.setSingleStep(0.05)
-        self.fuzzy_wrong.setValue(float(config.get("fuzzy_wrong", 0.40)))
+        self.fuzzy_wrong.setValue(float(config.get("fuzzy_wrong", Config().fuzzy_wrong)))
         form.addRow("Incorrect below", self.fuzzy_wrong)
 
         self.model_path = QLineEdit(str(config.get("whisper_model", "")))
@@ -123,10 +198,30 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
+        self.status = StatusPanel(self)
+        self.status.refresh(self.config)
+
+        note = QLabel(
+            "whisper.cpp and Ollama are separate programs, not part of this add-on — "
+            "Anki add-ons cannot bundle native binaries or a 141 MB model. "
+            "Ollama is optional; without it, grading uses text similarity alone."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: palette(mid); font-size: 11px;")
+
         layout = QVBoxLayout()
+        layout.addWidget(self.status)
+        layout.addWidget(note)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("color: palette(mid);")
+        layout.addWidget(separator)
         layout.addLayout(form)
         layout.addWidget(buttons)
         self.setLayout(layout)
+
+        # Re-check against whatever is typed in the fields, not just what was saved.
+        self.status.recheck_button.clicked.connect(lambda: self.status.refresh(self.values()))
 
     def values(self) -> dict:
         updated = dict(self.config)
@@ -151,7 +246,7 @@ class VoiceReviewDialog(QDialog):
     sig_phase = pyqtSignal(str, str)
     sig_card = pyqtSignal(str)
     sig_heard = pyqtSignal(str)
-    sig_verdict = pyqtSignal(bool, float, str)
+    sig_verdict = pyqtSignal(bool, float, str, str)
     sig_error = pyqtSignal(str)
     sig_finished = pyqtSignal(str)
 
@@ -280,13 +375,39 @@ class VoiceReviewDialog(QDialog):
     # --- worker plumbing ---
 
     def start(self) -> None:
+        # Never silently no-op because a previous run is still winding down — that is what made
+        # Stop-then-Start look like the add-on had died. Tear the old one down properly first,
+        # so its whisper-stream releases the microphone before a new one tries to open it.
         if self.worker and self.worker.is_alive():
-            return
+            self._set_status("Stopping previous session…", "#9aa7b4")
+            if not self.worker.shutdown(timeout=6.0):
+                self._set_hint(
+                    "The previous session is still shutting down. Try Start again in a moment.",
+                    error=True,
+                )
+                return
+        self.worker = None
+
         cfg = Config.from_mapping(self._config())
         problems = cfg.validate()
         if problems:
             self._set_hint("; ".join(problems), error=True)
             return
+
+        # Check the external programs before starting, so a missing model or a stopped Ollama
+        # is named here rather than showing up as "everything is graded incorrect".
+        checks = run_all(cfg)
+        blocking = blocking_problems(checks)
+        if blocking:
+            self._set_status("Not ready", "#ff6b6b")
+            self._set_hint(
+                blocking[0].name + ": " + blocking[0].detail + " — open Settings for how to fix it.",
+                error=True,
+            )
+            return
+        degraded = [c for c in checks if not c.good]
+        if degraded:
+            self._set_hint(f"{degraded[0].name}: {degraded[0].detail}. Grading by text only.")
 
         self.terminator_word = cfg.terminator
         self.transcript.clear()
@@ -300,7 +421,7 @@ class VoiceReviewDialog(QDialog):
             on_phase=lambda phase, detail: self.sig_phase.emit(phase, detail),
             on_card=lambda text: self.sig_card.emit(text),
             on_heard=lambda text: self.sig_heard.emit(text),
-            on_verdict=lambda ok, score, src: self.sig_verdict.emit(ok, score, src),
+            on_verdict=lambda ok, score, src, heard: self.sig_verdict.emit(ok, score, src, heard),
             on_error=lambda text: self.sig_error.emit(text),
             on_finished=lambda text: self.sig_finished.emit(text),
         )
@@ -308,13 +429,16 @@ class VoiceReviewDialog(QDialog):
 
     def stop(self) -> None:
         if self.worker:
-            self.worker.request_stop()
+            self.worker.request_stop()  # cuts off `say` mid-sentence
         self.stop_button.setEnabled(False)
+        self._set_status("Stopping…", "#9aa7b4")
 
     def closeEvent(self, event) -> None:
         # A window closed with the loop still running would leave whisper-stream holding the
         # microphone with nothing to turn it off.
-        self.stop()
+        if self.worker and self.worker.is_alive():
+            self.worker.shutdown(timeout=4.0)
+        self.worker = None
         super().closeEvent(event)
 
     # --- signal handlers (GUI thread) ---
@@ -331,10 +455,15 @@ class VoiceReviewDialog(QDialog):
     def _on_heard(self, text: str) -> None:
         self.transcript.appendPlainText(text)
 
-    def _on_verdict(self, correct: bool, score: float, source: str) -> None:
+    def _on_verdict(self, correct: bool, score: float, source: str, heard: str = "") -> None:
         label = "Correct" if correct else "Incorrect"
         self._set_status(label, "#4ade80" if correct else "#ff6b6b")
-        self._set_hint(f"score {score:.2f} · decided by {source}")
+        # Showing the graded text matters: when a verdict looks wrong it is usually because
+        # the microphone heard something other than what was said.
+        detail = f"score {score:.2f} · decided by {source}"
+        if heard:
+            detail += f' · heard "{heard}"'
+        self._set_hint(detail)
 
     def _on_error(self, text: str) -> None:
         self._set_status("Problem", "#ff6b6b")

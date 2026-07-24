@@ -62,6 +62,38 @@ def run_on_main(fn: Callable[[], Any], timeout: float = 10.0) -> Any:
 class AnkiBridge:
     """Same surface the CLI's AnkiConnect client exposes, so the runner does not care which."""
 
+    def __init__(self) -> None:
+        # Anki tells us when a question appears rather than us polling for it. This is the
+        # authoritative signal that the reviewer has moved on after an answer, which is what
+        # the "it read me the same question again" bug came down to.
+        self._question_shown = threading.Event()
+        self._hook_installed = False
+        self._install_hook()
+
+    def _install_hook(self) -> None:
+        try:
+            from aqt import gui_hooks
+
+            gui_hooks.reviewer_did_show_question.append(self._on_question_shown)
+            self._hook_installed = True
+        except Exception:  # noqa: BLE001 - polling fallback covers this
+            self._hook_installed = False
+
+    def _on_question_shown(self, card: Any = None) -> None:
+        self._question_shown.set()
+
+    def close(self) -> None:
+        """Detach from Anki. Without this the hook outlives the dialog and leaks per session."""
+        if not self._hook_installed:
+            return
+        try:
+            from aqt import gui_hooks
+
+            gui_hooks.reviewer_did_show_question.remove(self._on_question_shown)
+        except Exception:  # noqa: BLE001 - nothing useful to do if it is already gone
+            pass
+        self._hook_installed = False
+
     def _reviewer(self) -> Any:
         reviewer = getattr(mw, "reviewer", None)
         if reviewer is None:
@@ -99,6 +131,10 @@ class AnkiBridge:
     def answer_card(self, ease: int) -> None:
         if ease not in (1, 2, 3, 4):
             raise ValueError(f"ease must be 1-4, got {ease}")
+
+        # Clear before answering, so wait_for_question() waits for the question that follows
+        # this answer rather than returning instantly on the one already showing.
+        self._question_shown.clear()
 
         def answer() -> None:
             reviewer = self._reviewer()
@@ -152,6 +188,10 @@ class AnkiBridge:
     def wait_for_question(self, timeout: float = 5.0, poll: float = 0.03) -> bool:
         """Block until the reviewer is showing a fresh question.
 
+        Prefers Anki's own `reviewer_did_show_question` hook, which fires exactly when a new
+        question appears. Falls back to polling the reviewer's state, since the hook does not
+        fire on every path (burying refreshes without a fresh question event).
+
         Answering is asynchronous — in Anki 25.x `_answerCard` goes through an undoable
         operation, so it returns before the next card is on screen. Reading the card straight
         afterwards hands back the one just answered, and the loop re-speaks and re-grades it.
@@ -163,12 +203,14 @@ class AnkiBridge:
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if self._question_shown.wait(poll):
+                self._question_shown.clear()
+                return True
             state = self.reviewer_state()
             if state is None:
                 return False  # deck finished, or review was exited
             if state == "question":
                 return True
-            time.sleep(poll)
         return self.reviewer_state() == "question"
 
     def preflight(self) -> Card:

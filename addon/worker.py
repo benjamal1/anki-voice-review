@@ -49,7 +49,7 @@ class VoiceWorker(threading.Thread):
         on_phase: Callable[[str, str], None],
         on_card: Callable[[str], None],
         on_heard: Callable[[str], None],
-        on_verdict: Callable[[bool, float, str], None],
+        on_verdict: Callable[[bool, float, str, str], None],
         on_error: Callable[[str], None],
         on_finished: Callable[[str], None],
     ) -> None:
@@ -72,7 +72,24 @@ class VoiceWorker(threading.Thread):
         self._last_card_id = 0
 
     def request_stop(self) -> None:
+        """Stop now, not at the end of the current sentence.
+
+        Interrupting the speaker matters twice over: it is what the user asked for when they
+        pressed Stop, and the worker is otherwise blocked inside `say` and cannot reach the
+        code that releases the microphone — so a restart would find whisper still holding it
+        and the new process would exit immediately.
+        """
         self._stop.set()
+        self.tts.interrupt()
+
+    def shutdown(self, timeout: float = 5.0) -> bool:
+        """Stop and wait for the thread to actually finish. True if it did."""
+        self.request_stop()
+        self.join(timeout=timeout)
+        if self.is_alive():
+            return False
+        self.stt.stop()  # belt and braces; run() already does this in its finally
+        return True
 
     # --- intent execution ---
 
@@ -173,7 +190,12 @@ class VoiceWorker(threading.Thread):
                     self._execute(self.session.on_line(line))
                     if self.session.graded > before and self.session.last_verdict:
                         verdict = self.session.last_verdict
-                        self.on_verdict(verdict.correct, verdict.score, verdict.source)
+                        self.on_verdict(
+                            verdict.correct,
+                            verdict.score,
+                            verdict.source,
+                            self.session.last_transcript,
+                        )
                         self.on_phase(PHASE_VERDICT, "")
                     continue
 
