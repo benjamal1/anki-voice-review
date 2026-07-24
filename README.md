@@ -5,6 +5,9 @@ No keyboard, no mouse, no screen.
 
 Everything runs locally on your Mac. Nothing is sent anywhere.
 
+**Wear headphones.** The loop is always listening so you can speak the instant you know the
+answer — which only works if the mic never hears the computer's own voice.
+
 ---
 
 ## What this add-on does and does not include
@@ -113,8 +116,8 @@ the grade by voice before it is submitted.
 ### If a grade looks wrong
 
 The window shows what it actually heard next to every verdict. Most surprising grades are
-mis-hearings, not mis-grading. If the transcript is right but the grade is wrong, lower
-**Settings → Correct at or above**.
+mis-hearings, not mis-grading. If the transcript is right but the grade is genuinely wrong,
+say **undo** and grade it yourself, or switch **Grading** to Manual so you grade every card.
 
 ---
 
@@ -125,18 +128,12 @@ mis-hearings, not mis-grading. If the transcript is right but the grade is wrong
 | Setting | Default | What it does |
 |---|---|---|
 | End-of-answer word | `done` | the word that finishes your answer |
-| Headphones | off | let you talk over the card being read — say your answer or *skip* the moment you know |
+| Grading | Automatic | **Automatic** judges your answer with the model. **Manual** reads the answer back and waits for you to say good or again — no model, no time limit |
 | Pause after grading | 0 s | 0 goes straight to the next card; say **undo** to take back a grade. Raise it to pause and wait instead |
-| Grading | Automatic | **Automatic** grades for you. **Manual** reads the answer back and waits for you to say good or again — no model needed, no time limit |
-| Correct at or above | 0.62 | similarity needed to be marked correct outright. Lower = more lenient |
-| Incorrect below | 0.30 | similarity below which it is marked wrong outright |
 | Flag on skip | off | also flag the card when you skip or bury it, so you can find it later with `flag:1` in the browser |
 | Whisper model | `~/whisper-models/ggml-base.en.bin` | swap in `small.en` for accuracy over speed |
 | Judge model | `qwen2.5:3b` | any model you have pulled in Ollama |
 | Voice / Speech rate | system default / 190 | any voice from System Settings → Spoken Content |
-
-Grading is deliberately lenient. A wrong "incorrect" makes you repeat a card you knew; a wrong
-"correct" costs one slightly early interval, and you can override it by voice.
 
 ---
 
@@ -170,12 +167,19 @@ references are stripped before anything is spoken or graded.
 
 | Symptom | Cause |
 |---|---|
-| A spoken command does nothing | Older versions discarded everything heard just after the card was read, which threw away prompt replies. Fixed. If it recurs, lower `vad_threshold` — short words like "skip" are the first thing a strict threshold misses. |
-| Everything is graded incorrect | Usually the microphone. Check the transcript shown next to the verdict — if it is empty or garbled, whisper is not hearing you. Grant Anki microphone access. |
+| A spoken command does nothing | Whisper prefixes lines with a timestamp that used to break command matching — fixed. If it recurs, lower `vad_threshold`; short words like "skip" are the first thing a strict threshold misses. Enable the trace log (below) to see exactly what was recognised. |
+| It transcribes its own voice / grades gibberish | You are on speakers. **Headphones are required** — the mic must not hear the computer. |
+| Everything is graded incorrect | Check the transcript shown next to the verdict — if it is empty or garbled, whisper is not hearing you. Grant Anki microphone access. |
 | Sits on "Listening…" and nothing happens | `whisper-stream` exited, almost always a denied microphone. The window will say so. |
-| It transcribes its own voice | Raise **echo tail** in the add-on config. Headphones also solve it. |
+| "Skip" says "buried 0 cards" | Another add-on (e.g. AJT Mortician) may be intercepting bury. The trace log records the bury count. |
 | "Not ready" when pressing Start | Something required is missing — Settings shows which, and how to fix it. |
-| Nothing happens after Stop then Start | Fixed in current versions. If it recurs, close and reopen the window. |
+
+### Trace log
+
+For diagnosing a live session, create an empty file named `debug` in the add-on folder
+(`~/Library/Application Support/Anki2/addons21/anki_voice_review/`). The add-on then writes
+`trace.log` beside it — every heard line, what it was recognised as, the phase, and each call
+to Anki. Delete `debug` to turn it off.
 
 ---
 
@@ -191,10 +195,12 @@ in order:
 | `whisper_length_ms` (default 5000) | Less trailing audio transcribed per utterance. Lower is faster; too low clips long answers. |
 | `say_rate` (default 190) | Everything spoken gets shorter. 220-250 is still comfortable once used to it. |
 | `ollama_keep_alive` (default 30m) | Keeps the judge loaded. Without it a card after an idle spell pays seconds to reload the model. |
-| Headphones mode | Removes waiting for the card to be read at all — answer as soon as you know it. |
+| Answer / say a command early | You do not have to wait for the card to finish being read. The loop is always listening, so speak the moment you know — it cuts the reading off at once. |
 
 The judge model is warmed in the background as the session starts, so the first card that needs
-it does not pay for a cold load.
+it does not pay for a cold load. Going bigger than `qwen2.5:3b` does not help: the verdict is a
+single word, so latency is fixed round-trip overhead, not model compute — a 7B is slower for no
+gain on a task a 3B already grades correctly.
 
 Cutting further means a smaller whisper model, and `base.en` is already the small one — going
 below it costs accuracy, which costs re-reviews.
