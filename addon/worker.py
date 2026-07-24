@@ -31,6 +31,7 @@ from .avr.session import (
 from .avr.stt import Transcriber, TranscriberError
 from .avr.tts import Speaker, SpeakerError, is_echo
 from .bridge import AnkiBridge, BridgeError, NoCardShowing
+from . import tracelog
 
 log = logging.getLogger(__name__)
 
@@ -120,10 +121,12 @@ class VoiceWorker(threading.Thread):
                 # raise inside bury/flag/undo propagated out of the run loop and ended the
                 # review with no visible cause — indistinguishable from "it did nothing".
                 log.exception("intent %s failed", type(intent).__name__)
+                tracelog.write("INTENT-FAILED", f"{type(intent).__name__}: {exc}")
                 self.on_error(f"{type(intent).__name__} failed: {exc}")
 
     def _run_intent(self, intent, pending: list):
         """Perform one intent. Return False to stop executing the rest of this batch."""
+        tracelog.write("intent", type(intent).__name__)
         if isinstance(intent, Speak):
             self.on_phase(PHASE_SPEAKING, intent.text)
             if self.cfg.headphones:
@@ -144,6 +147,7 @@ class VoiceWorker(threading.Thread):
 
         elif isinstance(intent, AnswerCard):
             self.bridge.answer_card(intent.ease)
+            tracelog.write("answer_card", f"ease={intent.ease}")
 
         elif isinstance(intent, StartOverrideTimer):
             self._override_deadline = time.monotonic() + intent.seconds
@@ -162,11 +166,15 @@ class VoiceWorker(threading.Thread):
             self._reattach_current()
 
         elif isinstance(intent, FlagCard):
-            if not self.bridge.set_flag(intent.flag):
+            ok = self.bridge.set_flag(intent.flag)
+            tracelog.write("flag", f"flag={intent.flag} ok={ok}")
+            if not ok:
                 self.on_error("Could not flag this card.")
 
         elif isinstance(intent, BuryCard):
-            if not self.bridge.bury_current():
+            ok = self.bridge.bury_current()
+            tracelog.write("bury", f"ok={ok}")
+            if not ok:
                 self.on_error("Could not skip this card.")
 
         elif isinstance(intent, NextCard):
@@ -240,6 +248,13 @@ class VoiceWorker(threading.Thread):
             # State the settings actually in force. Anki keeps a user's existing add-on config
             # across updates, so a stale value can silently override a new default and make a
             # feature look broken when it was simply never switched on.
+            tracelog.reset()
+            tracelog.write(
+                "config",
+                f"grading={self.cfg.grading_mode} pause={self.cfg.override_window_s} "
+                f"headphones={self.cfg.headphones} flag_on_skip={self.cfg.flag_on_skip} "
+                f"terminator={self.cfg.terminator!r}",
+            )
             self.on_heard(
                 f"[settings] grading={self.cfg.grading_mode} "
                 f"pause={self.cfg.override_window_s}s "
@@ -279,17 +294,24 @@ class VoiceWorker(threading.Thread):
                 if line:
                     if is_echo(line, self.tts.last_spoken, self.cfg.command_words):
                         # The machine hearing itself, not the user.
-                        log.debug("discarded echo: %s", line)
+                        tracelog.write("echo-dropped", repr(line))
                         continue
                     # Report what it was understood AS, not just what was heard. "It shows
                     # skip but nothing happens" and "skip was never recognised" look identical
                     # from the outside, and they need completely different fixes.
                     action = match_command(line, self.cfg.command_words, self.cfg.terminator)
+                    tracelog.write(
+                        "heard", f"{line!r} action={action} phase={self.session.phase.name}"
+                    )
                     self.on_heard(f"{line}   [{action or 'answer'}]")
                     before = self.session.graded
                     if self.session.phase.name == "LISTENING":
                         self.on_phase(PHASE_GRADING, "")
-                    self._execute(self.session.on_line(line))
+                    produced = self.session.on_line(line)
+                    tracelog.write(
+                        "intents", ", ".join(type(i).__name__ for i in produced) or "(none)"
+                    )
+                    self._execute(produced)
                     if self.session.phase.name == "AWAITING_EASE":
                         self.on_phase(PHASE_AWAITING, "")
                     if self.session.graded > before and self.session.last_verdict:

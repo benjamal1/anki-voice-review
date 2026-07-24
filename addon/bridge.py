@@ -53,6 +53,14 @@ def run_on_main(fn: Callable[[], Any], timeout: float = 10.0) -> Any:
 
     mw.taskman.run_on_main(wrapper)
     if not done.wait(timeout):
+        # The GUI thread never ran our callback. Almost always means the main thread is blocked
+        # by another add-on's hook. Naming it beats a silent stall.
+        try:
+            from . import tracelog
+
+            tracelog.write("MAIN-THREAD-TIMEOUT", fn.__name__ if hasattr(fn, "__name__") else "?")
+        except Exception:  # noqa: BLE001
+            pass
         raise BridgeError("Anki did not respond on the GUI thread in time")
     if "error" in box:
         raise box["error"]
