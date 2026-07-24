@@ -13,5 +13,10 @@
   "echo_tail_seconds": 0.35,
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "qwen2.5:3b",
+  "ollama_keep_alive": "30m",
+  "announce_verdict": true,
+  "whisper_threads": 8,
+  "whisper_length_ms": 5000,
+  "vad_threshold": 0.45,
   "judge_timeout_seconds": 12.0
 }

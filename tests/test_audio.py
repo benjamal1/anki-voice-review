@@ -1,7 +1,7 @@
 """Audio adapters — line cleaning and the echo gate. No mic or speakers required."""
 
 from avr.stt import FakeTranscriber, clean_line
-from avr.tts import FakeSpeaker
+from avr.tts import FakeSpeaker, is_echo
 
 
 class TestCleanLine:
@@ -27,24 +27,55 @@ class TestCleanLine:
         assert clean_line("\n") == ""
 
 
-class TestEchoGate:
-    def test_speaking_drains_the_transcript_backlog(self):
-        # The core defence: whisper buffers audio, so lines produced from the TTS can arrive
-        # after `say` has already exited. Draining after speaking discards that backlog.
-        stt = FakeTranscriber(lines=[])
-        speaker = FakeSpeaker()
-        speaker.speak("this is the computer talking", gate=stt)
-        assert stt.drained == 1
+class TestEchoDetection:
+    """Echo is identified by content, not by timing. Discarding everything that arrived
+    shortly after speaking also threw away the user answering promptly — which is the single
+    most common thing they do, and why spoken commands appeared to do nothing."""
 
-    def test_empty_speech_does_not_touch_the_gate(self):
-        stt = FakeTranscriber(lines=[])
-        FakeSpeaker().speak("", gate=stt)
-        assert stt.drained == 0
+    def test_the_spoken_text_coming_back_is_echo(self):
+        spoken = "The mitochondrion is the powerhouse of the cell"
+        assert is_echo("the mitochondrion is the powerhouse of the cell", spoken)
 
-    def test_speaking_without_a_gate_is_allowed(self):
+    def test_a_mangled_version_of_the_spoken_text_is_still_echo(self):
+        spoken = "What is the capital of France?"
+        assert is_echo("what is the capital of france", spoken)
+
+    def test_a_command_said_straight_after_speaking_is_not_echo(self):
+        assert not is_echo("skip", "What is the capital of France?")
+
+    def test_an_ease_said_straight_after_the_prompt_is_not_echo(self):
+        # This is what broke manual mode: the prompt "Good or again?" contains the words it is
+        # asking for, so the reply matched it as echo and was discarded.
+        assert not is_echo("again", "Good or again?")
+
+    def test_a_recognised_command_is_never_echo(self):
+        for word in ("skip", "undo", "good", "again", "quit"):
+            assert not is_echo(word, "some card text that was just read aloud")
+
+    def test_a_real_answer_is_not_echo(self):
+        assert not is_echo("the powerhouse of the cell", "What does the mitochondrion do?")
+
+    def test_nothing_spoken_means_nothing_is_echo(self):
+        assert not is_echo("skip", "")
+
+    def test_the_prompt_no_longer_contains_the_words_it_asks_for(self):
+        from avr.cards import Card
+        from avr.config import Config
+        from avr.session import Session, Speak
+        from avr.grade import Verdict
+
+        s = Session(cfg=Config(grading_mode="manual"), grade_fn=lambda *a: Verdict(True, 1.0, "x"))
+        s.begin_card(Card(1, "q", "a"))
+        spoken = " ".join(
+            i.text for i in s.on_line("attempt done") if isinstance(i, Speak)
+        ).lower()
+        for word in ("good", "again", "hard", "easy"):
+            assert word not in spoken
+
+    def test_the_speaker_records_what_it_said(self):
         speaker = FakeSpeaker()
-        speaker.speak("no gate here")
-        assert speaker.said == ["no gate here"]
+        speaker.speak("hello there")
+        assert speaker.last_spoken == "hello there"
 
 
 class TestFakeTranscriber:

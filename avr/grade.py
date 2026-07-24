@@ -124,6 +124,9 @@ def ask_judge(question: str, answer: str, transcript: str, cfg: Config) -> bool 
             # Grading is a classification, not a creative task; temperature 0 also makes the
             # single-word reply constraint far more reliable.
             "options": {"temperature": 0, "num_predict": 8},
+            # Without this Ollama unloads the model after a few idle minutes and the next
+            # judged card pays seconds to reload it.
+            "keep_alive": cfg.ollama_keep_alive,
         }
     ).encode()
 
@@ -146,6 +149,29 @@ def ask_judge(question: str, answer: str, transcript: str, cfg: Config) -> bool 
         return True
     log.warning("judge reply not understood (%r); falling back to fuzzy", reply[:80])
     return None
+
+
+def prewarm(cfg: Config) -> bool:
+    """Load the judge model before the session starts.
+
+    A cold model costs several seconds on the first card that needs it, which lands right when
+    the user is least expecting a pause. Doing it up front, while they are still settling in,
+    makes that cost invisible.
+    """
+    if cfg.manual:
+        return False
+    body = json.dumps(
+        {"model": cfg.ollama_model, "prompt": "hi", "stream": False,
+         "options": {"num_predict": 1}, "keep_alive": cfg.ollama_keep_alive}
+    ).encode()
+    request = urllib.request.Request(
+        f"{cfg.ollama_url}/api/generate", data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=cfg.judge_timeout_s):
+            return True
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
 
 
 def correct_threshold(answer: str, cfg: Config) -> float:

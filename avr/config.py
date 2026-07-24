@@ -97,6 +97,16 @@ class Config:
     )
 
     # --- TTS ---
+    # Threads for whisper. The default of 4 leaves most of an M-series chip idle; transcription
+    # is the biggest single chunk of per-card latency, so this is the cheapest win available.
+    whisper_threads: int = field(default_factory=lambda: int(_env_float("AVR_WHISPER_THREADS", 8)))
+    # How much trailing audio is transcribed per utterance. Less audio = less work = faster.
+    # Long enough for a sentence-length answer, short enough not to re-chew silence.
+    whisper_length_ms: int = field(default_factory=lambda: int(_env_float("AVR_WHISPER_LENGTH", 5000)))
+    # Voice-activity threshold. Lower is more eager to treat quiet audio as speech, which
+    # matters for short single words like "skip".
+    vad_threshold: float = field(default_factory=lambda: _env_float("AVR_VAD_THRESHOLD", 0.45))
+
     say_voice: str = field(default_factory=lambda: _env_str("AVR_SAY_VOICE", ""))
     say_rate: str = field(default_factory=lambda: _env_str("AVR_SAY_RATE", "190"))
     # The mic keeps hearing while `say` plays. Audio takes a moment to drain after the process
@@ -117,6 +127,12 @@ class Config:
     # for a per-card fallback, and minimum latency is the headline requirement.
     ollama_model: str = field(default_factory=lambda: _env_str("AVR_OLLAMA_MODEL", "qwen2.5:3b"))
     judge_timeout_s: float = field(default_factory=lambda: _env_float("AVR_JUDGE_TIMEOUT", 12.0))
+    # Keep the judge model resident between calls. Without this Ollama unloads it after a few
+    # minutes and the next card pays several seconds to load it again.
+    ollama_keep_alive: str = field(default_factory=lambda: _env_str("AVR_OLLAMA_KEEP_ALIVE", "30m"))
+    # Speak "Correct"/"Incorrect" before moving on. Off saves roughly a second per card; the
+    # verdict is on screen and a wrong answer still gets read back either way.
+    announce_verdict: bool = True
 
     # --- Session ---
     terminator: str = field(default_factory=lambda: _env_str("AVR_TERMINATOR", "done"))
@@ -177,6 +193,11 @@ class Config:
             terminator=str(pick("terminator", defaults.terminator)),
             override_window_s=float(pick("override_window_seconds", defaults.override_window_s)),
             grading_mode=str(data.get("grading_mode") or "auto").lower(),
+            whisper_threads=int(data.get("whisper_threads") or 8),
+            whisper_length_ms=int(data.get("whisper_length_ms") or 5000),
+            vad_threshold=float(data.get("vad_threshold") or 0.45),
+            ollama_keep_alive=str(data.get("ollama_keep_alive") or "30m"),
+            announce_verdict=bool(data.get("announce_verdict", True)),
             flag_on_skip=int(data.get("flag_on_skip") or 0),
             headphones=bool(data.get("headphones", False)),
             command_words=_merge_command_words(data.get("command_words")),

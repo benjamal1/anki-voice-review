@@ -369,7 +369,9 @@ class Session:
         if preamble:
             intents.append(Speak(preamble))
         intents.append(Speak(self.card.answer))
-        intents.append(Speak("Good or again?"))
+        # Deliberately does not name the commands: a prompt containing the words it is asking
+        # for gets transcribed back and competes with the reply.
+        intents.append(Speak("Your call"))
         return intents
 
     def _grade(self) -> list[Intent]:
@@ -410,7 +412,9 @@ class Session:
 
         self.pending_ease = EASE_GOOD if verdict.correct else EASE_AGAIN
 
-        intents: list[Intent] = [ShowAnswer(), Speak("Correct" if verdict.correct else "Incorrect")]
+        intents: list[Intent] = [ShowAnswer()]
+        if self.cfg.announce_verdict:
+            intents.append(Speak("Correct" if verdict.correct else "Incorrect"))
         if not verdict.correct:
             # Hearing the right answer is the entire point of getting one wrong.
             intents.append(Speak(self.card.answer))

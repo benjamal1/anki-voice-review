@@ -100,11 +100,22 @@ class TranscriberError(RuntimeError):
 class Transcriber:
     """Wraps `whisper-stream`. Lines land in a queue via a background reader thread."""
 
-    def __init__(self, binary: str, model: Path, language: str = "en") -> None:
+    def __init__(
+        self,
+        binary: str,
+        model: Path,
+        language: str = "en",
+        threads: int = 8,
+        length_ms: int = 5000,
+        vad_threshold: float = 0.45,
+    ) -> None:
         self._binary = binary
         self._resolved_binary = binary
         self._model = model
         self._language = language
+        self._threads = threads
+        self._length_ms = length_ms
+        self._vad_threshold = vad_threshold
         self._process: subprocess.Popen[str] | None = None
         self._queue: queue.Queue[str] = queue.Queue()
         self._reader: threading.Thread | None = None
@@ -136,8 +147,9 @@ class Transcriber:
                 # transcribes when you stop talking rather than every N milliseconds. Lower
                 # latency per utterance and far less redundant re-transcription.
                 "--step", "0",
-                "--length", "8000",
-                "-vth", "0.6",
+                "--length", str(self._length_ms),
+                "-vth", str(self._vad_threshold),
+                "-t", str(self._threads),
                 "--keep-context",
             ],
             stdout=subprocess.PIPE,

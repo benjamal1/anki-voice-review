@@ -96,7 +96,13 @@ def cmd_grade(cfg: Config, args: argparse.Namespace) -> int:
 
 def cmd_listen(cfg: Config, args: argparse.Namespace) -> int:
     """Prove the mic works and that the TTS does not get transcribed back."""
-    transcriber = Transcriber(cfg.whisper_bin, cfg.whisper_model)
+    transcriber = Transcriber(
+            cfg.whisper_bin,
+            cfg.whisper_model,
+            threads=cfg.whisper_threads,
+            length_ms=cfg.whisper_length_ms,
+            vad_threshold=cfg.vad_threshold,
+        )
     speaker = Speaker(cfg.say_voice, cfg.say_rate, cfg.echo_tail_s)
     try:
         transcriber.preflight()
@@ -133,7 +139,13 @@ def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
             print(f"config error: {problem}", file=sys.stderr)
         return 2
 
-    transcriber = Transcriber(cfg.whisper_bin, cfg.whisper_model)
+    transcriber = Transcriber(
+            cfg.whisper_bin,
+            cfg.whisper_model,
+            threads=cfg.whisper_threads,
+            length_ms=cfg.whisper_length_ms,
+            vad_threshold=cfg.vad_threshold,
+        )
     speaker = Speaker(cfg.say_voice, cfg.say_rate, cfg.echo_tail_s)
     anki = AnkiConnect(cfg.anki_url)
 

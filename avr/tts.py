@@ -25,6 +25,32 @@ from .stt import resolve_binary
 
 log = logging.getLogger(__name__)
 
+# How similar a transcript line must be to what was just spoken to count as the machine
+# hearing itself. Generous, because speech recognition mangles synthesised speech more than
+# real speech; a command word will never come near a whole card's text anyway.
+ECHO_SIMILARITY = 0.55
+
+
+def is_echo(line: str, spoken: str, command_words: dict | None = None) -> bool:
+    """True when a transcript line is the computer hearing its own voice.
+
+    Content, not timing. The previous approach discarded every line that arrived shortly after
+    speaking, which threw away the user answering promptly — the single most common thing they
+    do. Comparing against what was actually said keeps the echo and keeps the user.
+
+    A recognised command is never echo. Prompts naturally contain the words they are asking
+    for — "Good or again?" contains both — so without this exception the prompt would suppress
+    the very reply it just requested.
+    """
+    from .grade import fuzzy_score
+    from .session import match_command
+
+    if not spoken or not line:
+        return False
+    if match_command(line, command_words):
+        return False
+    return fuzzy_score(spoken, line) >= ECHO_SIMILARITY
+
 
 class Drainable(Protocol):
     def drain(self) -> int: ...
@@ -43,6 +69,7 @@ class Speaker:
         self._process: Optional[subprocess.Popen] = None
         self._cancelled = False
         self._lock = threading.Lock()
+        self.last_spoken = ""
 
     def interrupt(self) -> None:
         """Cut off whatever is being said, right now.
@@ -78,10 +105,16 @@ class Speaker:
         return cmd + ["--", text]
 
     def speak(self, text: str, gate: Drainable | None = None) -> None:
-        """Say it, then hold the gate shut long enough for the echo to pass.
+        """Say it, then let the echo pass without swallowing the user's reply.
 
-        Blocking on purpose: the user should not be answering over the top of the question,
-        and letting `say` overlap the listening window is exactly what causes self-transcription.
+        Blocking on purpose: on speakers, letting `say` overlap the listening window is what
+        causes self-transcription.
+
+        What it deliberately does NOT do any more is drain the transcript queue afterwards.
+        Draining discards everything that arrived, which includes the user answering promptly —
+        say "skip" as the question finishes, or "again" the moment it asks, and the command
+        vanished. Echo is now identified by *content* instead: the text just spoken is recorded,
+        and the reader discards only lines that actually look like it. See `is_echo`.
         """
         text = (text or "").strip()
         if not text:
@@ -91,6 +124,8 @@ class Speaker:
                 return  # stop was pressed; do not start a new sentence
 
         self.muted_until = time.monotonic() + self._echo_tail_s
+        with self._lock:
+            self.last_spoken = text
         try:
             # Popen rather than run() so interrupt() has something to terminate.
             process = subprocess.Popen(
@@ -121,10 +156,6 @@ class Speaker:
         remaining = self.muted_until - time.monotonic()
         if remaining > 0:
             time.sleep(remaining)
-        if gate is not None:
-            dropped = gate.drain()
-            if dropped:
-                log.debug("echo gate discarded %d buffered line(s)", dropped)
 
     def start(self, text: str) -> None:
         """Begin speaking and return immediately, so the caller can keep listening.
@@ -175,6 +206,7 @@ class FakeSpeaker:
         self.said: list[str] = []
         self.muted_until = 0.0
         self.interrupted = False
+        self.last_spoken = ""
 
     def interrupt(self) -> None:
         self.interrupted = True
@@ -198,8 +230,7 @@ class FakeSpeaker:
         if not text or self.interrupted:
             return
         self.said.append(text)
-        if gate is not None:
-            gate.drain()
+        self.last_spoken = text
 
     @property
     def is_muted(self) -> bool:

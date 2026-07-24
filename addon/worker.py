@@ -13,7 +13,7 @@ import time
 from typing import Callable, Optional
 
 from .avr.config import Config
-from .avr.grade import grade
+from .avr.grade import grade, prewarm
 from .avr.session import (
     AnswerCard,
     BuryCard,
@@ -28,7 +28,7 @@ from .avr.session import (
     StartOverrideTimer,
 )
 from .avr.stt import Transcriber, TranscriberError
-from .avr.tts import Speaker, SpeakerError
+from .avr.tts import Speaker, SpeakerError, is_echo
 from .bridge import AnkiBridge, BridgeError, NoCardShowing
 
 log = logging.getLogger(__name__)
@@ -68,7 +68,13 @@ class VoiceWorker(threading.Thread):
         self.on_finished = on_finished
 
         self.session = Session(cfg=cfg, grade_fn=grade)
-        self.stt = Transcriber(cfg.whisper_bin, cfg.whisper_model)
+        self.stt = Transcriber(
+            cfg.whisper_bin,
+            cfg.whisper_model,
+            threads=cfg.whisper_threads,
+            length_ms=cfg.whisper_length_ms,
+            vad_threshold=cfg.vad_threshold,
+        )
         self.tts = Speaker(cfg.say_voice, cfg.say_rate, cfg.echo_tail_s)
 
         # NOT self._stop: threading.Thread already defines a private _stop() method, and
@@ -227,6 +233,10 @@ class VoiceWorker(threading.Thread):
             self.on_finished("")
             return
 
+        # Warm the judge while whisper is loading, so the first card that needs it does not
+        # pay for a cold model.
+        threading.Thread(target=prewarm, args=(self.cfg,), daemon=True).start()
+
         try:
             self.stt.start()
         except Exception as exc:  # noqa: BLE001 - surfaced in the dialog, not a traceback
@@ -245,6 +255,10 @@ class VoiceWorker(threading.Thread):
                     line = self.stt.get(timeout=POLL_S)
 
                 if line:
+                    if is_echo(line, self.tts.last_spoken, self.cfg.command_words):
+                        # The machine hearing itself, not the user.
+                        log.debug("discarded echo: %s", line)
+                        continue
                     self.on_heard(line)
                     before = self.session.graded
                     if self.session.phase.name == "LISTENING":

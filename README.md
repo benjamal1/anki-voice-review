@@ -217,6 +217,7 @@ stripped before anything is read aloud or graded.
 
 | Symptom | Cause |
 |---|---|
+| A spoken command does nothing | Older versions discarded everything heard just after the card was read, which threw away prompt replies. Fixed. If it recurs, lower `vad_threshold` — short words like "skip" are the first thing a strict threshold misses. |
 | Everything is graded incorrect | Usually the microphone. Check the transcript shown next to the verdict — if it is empty or garbled, whisper is not hearing you. Grant Anki microphone access. |
 | Sits on "Listening…" and nothing happens | `whisper-stream` exited, almost always a denied microphone. The window will say so. |
 | It transcribes its own voice | Raise **echo tail** in the add-on config. Headphones also solve it. |
@@ -224,6 +225,26 @@ stripped before anything is read aloud or graded.
 | Nothing happens after Stop then Start | Fixed in current versions. If it recurs, close and reopen the window. |
 
 ---
+
+## Latency
+
+Per-card time is mostly transcription, then the model if it is consulted. What helps, roughly
+in order:
+
+| Change | Effect |
+|---|---|
+| `whisper_threads` (default 8) | Biggest single win. The whisper default of 4 leaves most of an M-series chip idle. |
+| `announce_verdict: false` | Saves about a second per card. The verdict is on screen, and a wrong answer is still read back. |
+| `whisper_length_ms` (default 5000) | Less trailing audio transcribed per utterance. Lower is faster; too low clips long answers. |
+| `say_rate` (default 190) | Everything spoken gets shorter. 220-250 is still comfortable once used to it. |
+| `ollama_keep_alive` (default 30m) | Keeps the judge loaded. Without it a card after an idle spell pays seconds to reload the model. |
+| Headphones mode | Removes waiting for the card to be read at all — answer as soon as you know it. |
+
+The judge model is warmed in the background as the session starts, so the first card that needs
+it does not pay for a cold load.
+
+Cutting further means a smaller whisper model, and `base.en` is already the small one — going
+below it costs accuracy, which costs re-reviews.
 
 ## Development
 
