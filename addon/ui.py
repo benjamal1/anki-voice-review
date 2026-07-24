@@ -235,10 +235,17 @@ class SettingsDialog(QDialog):
         sync_mode()
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.RestoreDefaults
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        # Anki keeps your existing config across add-on updates, so settings saved against an
+        # older version can outlive the version that understood them. This is the escape hatch.
+        buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(
+            self._restore_defaults
+        )
 
         self.status = StatusPanel(self)
         self.status.refresh(self.config)
@@ -264,6 +271,21 @@ class SettingsDialog(QDialog):
 
         # Re-check against whatever is typed in the fields, not just what was saved.
         self.status.recheck_button.clicked.connect(lambda: self.status.refresh(self.values()))
+
+    def _restore_defaults(self) -> None:
+        defaults = Config()
+        self.terminator.setText(defaults.terminator)
+        self.override.setValue(defaults.override_window_s)
+        self.headphones.setChecked(defaults.headphones)
+        self.grading_mode.setCurrentIndex(0)
+        self.fuzzy_correct.setValue(defaults.fuzzy_correct)
+        self.fuzzy_wrong.setValue(defaults.fuzzy_wrong)
+        self.flag_on_skip.setCurrentIndex(0)
+        self.model_path.setText(str(defaults.whisper_model))
+        self.ollama_model.setText(defaults.ollama_model)
+        self.say_voice.setText("")
+        self.say_rate.setText(str(defaults.say_rate))
+        self.status.refresh(self.values())
 
     def values(self) -> dict:
         updated = dict(self.config)
@@ -472,6 +494,20 @@ class VoiceReviewDialog(QDialog):
             on_verdict=lambda ok, score, src, heard: self.sig_verdict.emit(ok, score, src, heard),
             on_error=lambda text: self.sig_error.emit(text),
             on_finished=lambda text: self.sig_finished.emit(text),
+        )
+        mode = "Manual" if cfg.manual else "Automatic"
+        extras = []
+        if cfg.headphones:
+            extras.append("headphones")
+        if cfg.override_window_s:
+            extras.append(f"{cfg.override_window_s:g}s pause")
+        if cfg.flag_on_skip:
+            extras.append("flags on skip")
+        self.commands.setText(
+            f"<b>{mode} grading</b>" + (f" · {' · '.join(extras)}" if extras else "")
+            + "<br>Say your answer then the end word. Commands: "
+            "<b>again</b> · <b>hard</b> · <b>good</b> · <b>easy</b> · "
+            "<b>undo</b> · <b>repeat</b> · <b>skip</b> · <b>quit</b>"
         )
         self.worker.start()
 

@@ -629,3 +629,47 @@ class TestUndoWaitsInsteadOfRereading:
         s.on_line("undo")
         assert s.resume_card(CARD) == []
         assert s.phase is Phase.AWAITING_EASE
+
+
+class TestCommandsWorkInEveryPhase:
+    """A command that is silently ignored in one phase is indistinguishable from a broken
+    microphone. Every phase that can hear a command must act on it."""
+
+    def phases(self):
+        """One session per phase, each parked in that phase."""
+        listening = session()
+
+        override = windowed(correct=True)
+        override.on_line("Paris done")
+        assert override.phase is Phase.OVERRIDE
+
+        awaiting = Session(cfg=Config(grading_mode="manual"), grade_fn=always(True))
+        awaiting.begin_card(CARD)
+        awaiting.on_line("attempt done")
+        assert awaiting.phase is Phase.AWAITING_EASE
+
+        return {"LISTENING": listening, "OVERRIDE": override, "AWAITING_EASE": awaiting}
+
+    def test_skip_works_in_every_phase(self):
+        for name, s in self.phases().items():
+            assert of(s.on_line("skip"), BuryCard), f"skip did nothing in {name}"
+
+    def test_bury_works_in_every_phase(self):
+        for name, s in self.phases().items():
+            assert of(s.on_line("bury"), BuryCard), f"bury did nothing in {name}"
+
+    def test_quit_works_in_every_phase(self):
+        for name, s in self.phases().items():
+            assert of(s.on_line("quit"), Quit), f"quit did nothing in {name}"
+
+    def test_an_ease_works_in_every_phase(self):
+        for name, s in self.phases().items():
+            intents = s.on_line("again")
+            graded = of(intents, AnswerCard) or of(intents, RegradeCard)
+            assert graded, f"ease did nothing in {name}"
+
+    def test_skip_during_the_override_window_does_not_grade(self):
+        s = windowed(correct=True)
+        s.on_line("Paris done")
+        intents = s.on_line("skip")
+        assert of(intents, BuryCard) and not of(intents, AnswerCard)

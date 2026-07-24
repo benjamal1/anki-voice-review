@@ -280,6 +280,14 @@ class Session:
         if command == "quit":
             self.phase = Phase.FINISHED
             return [Quit()]
+        if command == "skip":
+            # Previously only ease and quit were accepted here, so saying "skip" during the
+            # window did nothing at all — silently, which is the worst way for it to fail.
+            return self._set_aside()
+        if command == "undo":
+            return self._undo()
+        if command == "repeat":
+            return [Speak(self.card.question if self.card else "")]
         # Anything else during the window is stray talk. Ignore rather than guess.
         return []
 

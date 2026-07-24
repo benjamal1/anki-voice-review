@@ -15,6 +15,7 @@ from typing import Callable, Optional
 from .avr.config import Config
 from .avr.grade import grade, prewarm
 from .avr.session import (
+    match_command,
     AnswerCard,
     BuryCard,
     FlagCard,
@@ -111,59 +112,70 @@ class VoiceWorker(threading.Thread):
         pending = list(intents)
         while pending and not self._stopping.is_set():
             intent = pending.pop(0)
+            try:
+                if self._run_intent(intent, pending) is False:
+                    return
+            except Exception as exc:  # noqa: BLE001
+                # One failing action must not take the session with it. Before this, a single
+                # raise inside bury/flag/undo propagated out of the run loop and ended the
+                # review with no visible cause — indistinguishable from "it did nothing".
+                log.exception("intent %s failed", type(intent).__name__)
+                self.on_error(f"{type(intent).__name__} failed: {exc}")
 
-            if isinstance(intent, Speak):
-                self.on_phase(PHASE_SPEAKING, intent.text)
-                if self.cfg.headphones:
-                    interrupted = self._speak_interruptibly(intent.text)
-                    if interrupted:
-                        # The user talked over it. Their words are already queued, so stop
-                        # running the rest of this batch and let the loop handle them.
-                        return
-                else:
-                    # Blocking, then draining: on speakers the mic hears the TTS, so this is
-                    # what stops whisper transcribing Anki's own voice as the user's answer.
-                    self.tts.speak(intent.text, gate=self.stt)
-                if self.session.phase.name == "LISTENING":
-                    self.on_phase(PHASE_LISTENING, "")
+    def _run_intent(self, intent, pending: list):
+        """Perform one intent. Return False to stop executing the rest of this batch."""
+        if isinstance(intent, Speak):
+            self.on_phase(PHASE_SPEAKING, intent.text)
+            if self.cfg.headphones:
+                interrupted = self._speak_interruptibly(intent.text)
+                if interrupted:
+                    # The user talked over it. Their words are already queued, so stop
+                    # running the rest of this batch and let the loop handle them.
+                    return False
+            else:
+                # Blocking, then draining: on speakers the mic hears the TTS, so this is
+                # what stops whisper transcribing Anki's own voice as the user's answer.
+                self.tts.speak(intent.text, gate=self.stt)
+            if self.session.phase.name == "LISTENING":
+                self.on_phase(PHASE_LISTENING, "")
 
-            elif isinstance(intent, ShowAnswer):
-                self.bridge.show_answer()
+        elif isinstance(intent, ShowAnswer):
+            self.bridge.show_answer()
 
-            elif isinstance(intent, AnswerCard):
-                self.bridge.answer_card(intent.ease)
+        elif isinstance(intent, AnswerCard):
+            self.bridge.answer_card(intent.ease)
 
-            elif isinstance(intent, StartOverrideTimer):
-                self._override_deadline = time.monotonic() + intent.seconds
+        elif isinstance(intent, StartOverrideTimer):
+            self._override_deadline = time.monotonic() + intent.seconds
 
-            elif isinstance(intent, UndoCard):
-                if self.bridge.undo():
-                    self._override_deadline = None
-                    self.on_phase(PHASE_AWAITING, "")
-                else:
-                    self.on_error("Anki had nothing to undo.")
-
-            elif isinstance(intent, RegradeCard):
-                if not self.bridge.regrade(intent.card_id, intent.ease):
-                    self.on_error("Could not re-grade that card.")
-                # The reviewer never moved, so the user is still on an unanswered card.
-                self._reattach_current()
-
-            elif isinstance(intent, FlagCard):
-                if not self.bridge.set_flag(intent.flag):
-                    self.on_error("Could not flag this card.")
-
-            elif isinstance(intent, BuryCard):
-                if not self.bridge.bury_current():
-                    self.on_error("Could not skip this card.")
-
-            elif isinstance(intent, NextCard):
+        elif isinstance(intent, UndoCard):
+            if self.bridge.undo():
                 self._override_deadline = None
-                pending.extend(self._advance())
+                self.on_phase(PHASE_AWAITING, "")
+            else:
+                self.on_error("Anki had nothing to undo.")
 
-            elif isinstance(intent, Quit):
-                self._stopping.set()
-                return
+        elif isinstance(intent, RegradeCard):
+            if not self.bridge.regrade(intent.card_id, intent.ease):
+                self.on_error("Could not re-grade that card.")
+            # The reviewer never moved, so the user is still on an unanswered card.
+            self._reattach_current()
+
+        elif isinstance(intent, FlagCard):
+            if not self.bridge.set_flag(intent.flag):
+                self.on_error("Could not flag this card.")
+
+        elif isinstance(intent, BuryCard):
+            if not self.bridge.bury_current():
+                self.on_error("Could not skip this card.")
+
+        elif isinstance(intent, NextCard):
+            self._override_deadline = None
+            pending.extend(self._advance())
+
+        elif isinstance(intent, Quit):
+            self._stopping.set()
+            return False
 
     def _speak_interruptibly(self, text: str) -> bool:
         """Speak while still listening. Returns True if the user talked over it.
@@ -225,6 +237,16 @@ class VoiceWorker(threading.Thread):
     def run(self) -> None:
         try:
             self.on_phase(PHASE_LOADING, "Starting whisper…")
+            # State the settings actually in force. Anki keeps a user's existing add-on config
+            # across updates, so a stale value can silently override a new default and make a
+            # feature look broken when it was simply never switched on.
+            self.on_heard(
+                f"[settings] grading={self.cfg.grading_mode} "
+                f"pause={self.cfg.override_window_s}s "
+                f"headphones={'on' if self.cfg.headphones else 'off'} "
+                f"flag_on_skip={self.cfg.flag_on_skip} "
+                f"vad={self.cfg.vad_threshold} threads={self.cfg.whisper_threads}"
+            )
             self.stt.preflight()
             self.tts.preflight()
             card = self.bridge.preflight()
@@ -259,7 +281,11 @@ class VoiceWorker(threading.Thread):
                         # The machine hearing itself, not the user.
                         log.debug("discarded echo: %s", line)
                         continue
-                    self.on_heard(line)
+                    # Report what it was understood AS, not just what was heard. "It shows
+                    # skip but nothing happens" and "skip was never recognised" look identical
+                    # from the outside, and they need completely different fixes.
+                    action = match_command(line, self.cfg.command_words, self.cfg.terminator)
+                    self.on_heard(f"{line}   [{action or 'answer'}]")
                     before = self.session.graded
                     if self.session.phase.name == "LISTENING":
                         self.on_phase(PHASE_GRADING, "")

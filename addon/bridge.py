@@ -162,16 +162,33 @@ class AnkiBridge:
 
         def bury() -> bool:
             if not self._review_active():
-                return False
+                raise BridgeError("no card is showing, so there is nothing to skip")
             reviewer = self._reviewer()
             card = reviewer.card
+
+            # Try each known spelling in turn and say which ones were unavailable, rather than
+            # reporting a bare False that could mean any of them. Other add-ons also hook
+            # burying (AJT Mortician, for one), so this is a genuinely contested code path.
+            errors = []
             method = getattr(reviewer, "bury_current_card", None)
             if callable(method):
-                method()
-                return True
-            mw.col.sched.bury_cards([card.id])
-            mw.reset()  # refresh the reviewer so it moves off the buried card
-            return True
+                try:
+                    method()
+                    return True
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"reviewer.bury_current_card: {exc}")
+
+            for name in ("bury_cards", "buryCards"):
+                sched_method = getattr(mw.col.sched, name, None)
+                if callable(sched_method):
+                    try:
+                        sched_method([card.id])
+                        mw.reset()
+                        return True
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(f"sched.{name}: {exc}")
+
+            raise BridgeError("could not bury the card — " + "; ".join(errors or ["no usable API"]))
 
         return bool(run_on_main(bury))
 
