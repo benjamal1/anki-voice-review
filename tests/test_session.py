@@ -673,3 +673,76 @@ class TestCommandsWorkInEveryPhase:
         s.on_line("Paris done")
         intents = s.on_line("skip")
         assert of(intents, BuryCard) and not of(intents, AnswerCard)
+
+
+class TestManualModeQuickGrading:
+    """Manual mode must accept a grade said quickly, however whisper packages it — not only as
+    a separate utterance after 'done'."""
+
+    def manual(self):
+        s = Session(cfg=Config(grading_mode="manual"), grade_fn=always(True))
+        s.begin_card(CARD)
+        return s
+
+    def test_a_bare_ease_in_front_grades_immediately(self):
+        s = self.manual()
+        intents = s.on_line("good")
+        assert of(intents, AnswerCard)[0].ease == EASE_GOOD
+        assert of(intents, ShowAnswer) and of(intents, NextCard)
+
+    def test_a_compound_done_plus_grade_on_one_line(self):
+        # "done good" said in one breath — the whole point of the request.
+        s = self.manual()
+        intents = s.on_line("done good")
+        assert of(intents, AnswerCard)[0].ease == EASE_GOOD
+
+    def test_answer_then_grade_on_one_line(self):
+        s = self.manual()
+        intents = s.on_line("proprioception again")
+        assert of(intents, AnswerCard)[0].ease == EASE_AGAIN
+
+    def test_a_synonym_ease_works_the_same(self):
+        s = self.manual()
+        assert of(s.on_line("that was correct"), AnswerCard)[0].ease == EASE_GOOD
+        s2 = self.manual()
+        assert of(s2.on_line("no"), AnswerCard)[0].ease == EASE_AGAIN
+
+    def test_grade_after_done_still_works_two_lines(self):
+        # The old two-utterance flow must keep working.
+        s = self.manual()
+        s.on_line("done")
+        assert s.phase is Phase.AWAITING_EASE
+        assert of(s.on_line("good"), AnswerCard)[0].ease == EASE_GOOD
+
+    def test_trailing_ease_accepted_in_the_awaiting_phase_too(self):
+        s = self.manual()
+        s.on_line("done")
+        assert of(s.on_line("okay good"), AnswerCard)[0].ease == EASE_GOOD
+
+    def test_done_alone_still_just_flips_and_waits(self):
+        s = self.manual()
+        intents = s.on_line("done")
+        assert not of(intents, AnswerCard), "bare done must not grade"
+        assert s.phase is Phase.AWAITING_EASE
+
+    def test_an_answer_without_a_grade_word_does_not_grade(self):
+        s = self.manual()
+        assert s.on_line("proprioception") == []
+        assert s.graded == 0
+
+
+class TestAutoModeUnaffectedByTrailingEase:
+    """The trailing-ease shortcut is manual-only. In auto mode the answer content is graded, so
+    an answer ending in a command word must NOT be hijacked into a manual grade."""
+
+    def test_an_auto_answer_ending_in_good_is_still_graded_normally(self):
+        seen = {}
+
+        def spy(q, a, t, cfg):
+            seen["t"] = t
+            return Verdict(True, 1.0, "stub")
+
+        s = Session(cfg=Config(), grade_fn=spy)  # auto
+        s.begin_card(CARD)
+        s.on_line("cholesterol can be good done")
+        assert "good" in seen.get("t", ""), "the whole answer, including 'good', must be graded"

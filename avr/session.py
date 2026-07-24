@@ -224,10 +224,43 @@ class Session:
     def _command(self, line: str) -> str | None:
         return match_command(line, self.cfg.command_words, self.cfg.terminator)
 
+    def _trailing_ease(self, line: str) -> str | None:
+        """The ease action if the LAST spoken word is one, else None.
+
+        In manual mode the answer content is never graded, so a line ending in an ease word is
+        a grade said quickly — on its own ("good"), compound ("done good"), or straight after
+        the answer ("proprioception good"). Only the last word is inspected, and only ease
+        words (all single-word), so this never trips on an answer that merely contains one.
+        """
+        words = normalize(line).split()
+        if not words:
+            return None
+        last = words[-1]
+        for action in EASE_COMMANDS:
+            if any(last == normalize(w) for w in self.cfg.command_words.get(action, [action])):
+                return action
+        return None
+
+    def _grade_now(self, ease: int) -> list[Intent]:
+        """Reveal the answer and grade it with `ease`, then advance. Manual fast path."""
+        self.phase = Phase.LISTENING
+        self.graded += 1
+        if ease >= EASE_GOOD:
+            self.correct += 1
+        self.previous_card = self.card
+        return [ShowAnswer(), AnswerCard(ease), NextCard()]
+
     def _on_line_listening(self, line: str) -> list[Intent]:
         command = self._command(line)
         if command:
             return self._run_command(command)
+
+        if self.cfg.manual:
+            # Grade the moment an ease word is heard, however it was packaged — no need to say
+            # "done" first and then the grade on a separate breath.
+            ease = self._trailing_ease(line)
+            if ease is not None:
+                return self._grade_now(EASE_BY_NAME[ease])
 
         speech, terminated = split_terminator(line, self.cfg.terminator)
         if speech:
@@ -243,6 +276,10 @@ class Session:
         so falling back to one after a few seconds would defeat it.
         """
         command = self._command(line)
+        if command is None:
+            # Accept a grade even when it is not the whole utterance — "okay good", "that's
+            # again". This is a grading phase, so a trailing ease word is unambiguous.
+            command = self._trailing_ease(line)
         if command in EASE_COMMANDS:
             ease = EASE_BY_NAME[command]
             self.phase = Phase.LISTENING
