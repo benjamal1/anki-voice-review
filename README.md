@@ -101,15 +101,15 @@ The card is read out. Say your answer, then say **"done"**. You hear "correct" o
 and on a wrong answer the correct answer is read back. There is then a short window to change
 the grade by voice before it is submitted.
 
-| Say | What happens |
-|---|---|
-| your answer, then **done** | grade it, then straight on to the next card |
-| **undo** (or *go back*) | take back the last grade. It says "undone" and waits — nothing is read out, just say how it should have been graded and it is applied to that card |
-| just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |
-| **again** / **hard** / **good** / **easy** | set the grade yourself. *yes*/*no*/*correct*/*right* also work |
-| **repeat** | read the card again, discard what you had said |
-| **skip** or **bury** | set the card aside and move on. The answer is never shown or read — for image cards and anything that cannot be read aloud. Can also flag the card, see below |
-| **quit** | end the session |
+| Say | What happens | **Stability** |
+|---|---||---|
+| your answer, then **done** | grade it, then straight on to the next card |---|
+| **undo** (or *go back*) | take back the last grade. It says "undone" and waits — nothing is read out, just say how it should have been graded and it is applied to that card | Not tested reliably |
+| just **done**, nothing before it | you didn't know it — marked wrong and the answer is read back |---|
+| **again** / **hard** / **good** / **easy** | set the grade yourself. *yes*/*no*/*correct*/*right* also work |---|
+| **repeat** | read the card again, discard what you had said | Not tested|---|
+| **skip** or **bury** | set the card aside and move on. The answer is never shown or read — for image cards and anything that cannot be read aloud. Can also flag the card, see below |---|
+| **quit** | end the session |---|
 
 **Stop** ends the session immediately, cutting off mid-sentence if it is talking.
 
