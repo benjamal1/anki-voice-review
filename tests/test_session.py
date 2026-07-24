@@ -287,7 +287,8 @@ class TestBareTerminatorMeansIDontKnow:
         s = session()
         intents = s.on_line("done")
         assert of(intents, ShowAnswer)
-        assert CARD.answer in [i.text for i in of(intents, Speak)]
+        # Merged into the verdict utterance ("Incorrect. Paris"), so match as a substring.
+        assert any(CARD.answer in i.text for i in of(intents, Speak))
 
     def test_bare_terminator_only_flips_when_reading_is_off(self):
         s = session(read_answer="never")
@@ -814,22 +815,39 @@ class TestAutoModeReadsAnswer:
     def spoken(self, intents):
         return [i.text for i in of(intents, Speak)]
 
+    def reads(self, intents):
+        # The answer is merged into the verdict utterance ("Incorrect. Paris"), so check as a
+        # substring rather than a standalone Speak.
+        return any(CARD.answer in text for text in self.spoken(intents))
+
     # --- default: read only when wrong ---
 
     def test_default_reads_the_answer_when_wrong(self):
         s = session(correct=False)  # default read_answer="incorrect"
         intents = s.on_line("Berlin done")
         assert of(intents, ShowAnswer)
-        assert CARD.answer in self.spoken(intents)
+        assert self.reads(intents)
         # Held, not advanced: no AnswerCard/NextCard until the read finishes.
         assert not of(intents, AnswerCard) and not of(intents, NextCard)
         assert of(intents, StartOverrideTimer)
         assert s.phase is Phase.OVERRIDE
 
+    def test_verdict_and_answer_are_one_utterance(self):
+        # No second `say` spawn between "Incorrect" and the answer — that gap was the pause.
+        s = session(correct=False)
+        spoken = self.spoken(s.on_line("Berlin done"))
+        assert any("Incorrect" in t and CARD.answer in t for t in spoken)
+
+    def test_speech_is_queued_before_the_flip(self):
+        # Speak precedes ShowAnswer so audio is not held behind a slow GUI-thread card render.
+        intents = session(correct=False).on_line("Berlin done")
+        kinds = [type(i).__name__ for i in intents]
+        assert kinds.index("Speak") < kinds.index("ShowAnswer")
+
     def test_default_does_not_read_the_answer_when_correct(self):
         s = session(correct=True)
         intents = s.on_line("Paris done")
-        assert CARD.answer not in self.spoken(intents)
+        assert not self.reads(intents)
         # Nothing to wait for, so it advances immediately.
         assert of(intents, ShowAnswer) and of(intents, AnswerCard) and of(intents, NextCard)
 
@@ -845,7 +863,7 @@ class TestAutoModeReadsAnswer:
         for correct in (True, False):
             s = session(correct=correct, read_answer="never")
             intents = s.on_line(("Paris" if correct else "Berlin") + " done")
-            assert CARD.answer not in self.spoken(intents)
+            assert not self.reads(intents)
             # No read and no pause: straight through.
             assert of(intents, AnswerCard) and of(intents, NextCard)
 
@@ -855,7 +873,7 @@ class TestAutoModeReadsAnswer:
         for correct in (True, False):
             s = session(correct=correct, read_answer="always")
             intents = s.on_line(("Paris" if correct else "Berlin") + " done")
-            assert CARD.answer in self.spoken(intents)
+            assert self.reads(intents)
             assert of(intents, StartOverrideTimer) and not of(intents, AnswerCard)
 
     # --- a spoken command still barges in over the held read ---

@@ -479,14 +479,22 @@ class Session:
 
         self.pending_ease = EASE_GOOD if verdict.correct else EASE_AGAIN
 
-        # Flip the card so the answer is visible on screen.
-        intents: list[Intent] = [ShowAnswer()]
-        if self.cfg.announce_verdict:
-            intents.append(Speak("Correct" if verdict.correct else "Incorrect"))
-
         read = self.cfg.reads_answer(verdict.correct)
-        if read:
-            intents.append(Speak(self.card.answer))
+        verdict_word = (
+            ("Correct" if verdict.correct else "Incorrect") if self.cfg.announce_verdict else ""
+        )
+
+        # Verdict and answer go out as ONE utterance, not two `say` calls — a second subprocess
+        # spawn between "Incorrect" and the answer is an audible gap right when the user is
+        # waiting to hear it. And the speech is queued BEFORE ShowAnswer: ShowAnswer marshals to
+        # the GUI thread and can stall on a slow card re-render, so queueing it first would delay
+        # the audio behind the flip. Speaking first starts the sound immediately; the visual flip
+        # catches up in parallel.
+        spoken = ". ".join(p for p in (verdict_word, self.card.answer if read else "") if p)
+        intents: list[Intent] = []
+        if spoken:
+            intents.append(Speak(spoken))
+        intents.append(ShowAnswer())
 
         if not read and self.cfg.override_window_s <= 0:
             # Nothing to wait for: no answer being read and no configured pause. Straight on to
