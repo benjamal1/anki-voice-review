@@ -265,10 +265,21 @@ class Transcriber:
 
 
 class FakeTranscriber:
-    """Scripted transcript source for tests and dry runs. Same interface, no mic."""
+    """Scripted transcript source for tests and dry runs. Same interface, no mic.
 
-    def __init__(self, lines: list[str], delay: float = 0.0) -> None:
+    `lines` is a script: each item is a separate real-world utterance, revealed one at a time,
+    only when `get()` is called for it — exactly like a person speaking turns in a
+    conversation. `backlog`, if given, models the OTHER situation: content that has already
+    arrived and is sitting in the queue before the caller has read any of it (what a real
+    streaming re-emission burst looks like while the worker is busy elsewhere). Only `backlog`
+    is what `drain()` discards — draining must never be able to erase a turn of the script the
+    test hasn't "spoken" yet, or every multi-turn test would break the instant a state
+    transition triggers a drain.
+    """
+
+    def __init__(self, lines: list[str], delay: float = 0.0, backlog: list[str] | None = None) -> None:
         self._lines = list(lines)
+        self._backlog: list[str] = list(backlog or [])
         self._delay = delay
         self.drained = 0
         self._last_text = ""
@@ -285,10 +296,12 @@ class FakeTranscriber:
         # Apply clean_line and the same duplicate-emission suppression as the real _pump, so a
         # test can script a streaming re-emission (the same line several times in a row) and
         # exercise the actual production filtering, not an idealised one-line-per-utterance feed.
-        while self._lines:
+        # Backlog is served first — it represents content that arrived before this call.
+        while self._backlog or self._lines:
             if self._delay:
                 time.sleep(self._delay)
-            text = clean_line(self._lines.pop(0))
+            raw = self._backlog.pop(0) if self._backlog else self._lines.pop(0)
+            text = clean_line(raw)
             if not text:
                 continue
             now = time.monotonic()
@@ -301,8 +314,12 @@ class FakeTranscriber:
         return None
 
     def drain(self) -> int:
-        self.drained += 1
-        return 0
+        # Mirrors the real Transcriber's drain(): discard whatever is currently queued — the
+        # backlog only, not the not-yet-spoken script (see the class docstring).
+        dropped = len(self._backlog)
+        self._backlog = []
+        self.drained += dropped
+        return dropped
 
     def is_alive(self) -> bool:
         return True

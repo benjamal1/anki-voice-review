@@ -54,6 +54,29 @@ class TestFakeTranscriber:
         assert stt.get(0.1) == "Again."
 
 
+class TestDrain:
+    """drain() must discard a genuine backlog (content already queued, not yet read) without
+    ever being able to erase the not-yet-spoken script — the two are deliberately separate."""
+
+    def test_drain_discards_a_queued_backlog(self):
+        stt = FakeTranscriber(lines=[], backlog=["skip", "skip"])
+        assert stt.drain() == 2
+        assert stt.get(0.01) is None
+
+    def test_drain_never_touches_the_future_script(self):
+        # This is the property that keeps every multi-turn worker test correct: a
+        # state-transition drain() must not be able to eat a turn the test hasn't reached yet.
+        stt = FakeTranscriber(lines=["good", "undo", "again"])
+        assert stt.drain() == 0
+        assert stt.get(0.01) == "good"
+        assert stt.get(0.01) == "undo"
+
+    def test_backlog_is_served_before_the_script(self):
+        stt = FakeTranscriber(lines=["later"], backlog=["now"])
+        assert stt.get(0.01) == "now"
+        assert stt.get(0.01) == "later"
+
+
 class TestIsDuplicateEmission:
     def test_no_previous_line_is_never_a_duplicate(self):
         assert not is_duplicate_emission("", 0.0, "Good.", 1.0)

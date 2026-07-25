@@ -71,6 +71,9 @@ class Runner:
 
             elif isinstance(intent, ShowAnswer):
                 self.anki.show_answer()
+                # Front->back is a state change: a leftover recognition from the front must not
+                # act on whatever comes next (a grade, a correction).
+                self.stt.drain()
 
             elif isinstance(intent, AnswerCard):
                 self.anki.answer_card(intent.ease)
@@ -135,9 +138,11 @@ class Runner:
     def _reattach_current(self) -> None:
         """Point the session at the card now showing, without reading it out again."""
         try:
-            self.session.resume_card(self.anki.current_card())
+            card = self.anki.current_card()
         except AnkiError:
-            pass
+            return
+        self.stt.drain()
+        self.session.resume_card(card)
 
     def _record_timing(self) -> None:
         if not self._card_started:
@@ -166,6 +171,11 @@ class Runner:
             log.error("lost Anki: %s", exc)
             self._running = False
             return []
+
+        # New card, new state. A leftover recognition from before this point belongs to the
+        # card just left behind, not this one — streaming transcription can keep re-emitting
+        # its trailing audio window for a while after it already triggered this advance.
+        self.stt.drain()
 
         self._card_started = time.monotonic()
         return self.session.begin_card(card)

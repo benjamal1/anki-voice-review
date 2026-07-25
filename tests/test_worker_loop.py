@@ -318,6 +318,78 @@ class TestStreamingDuplicateSuppression:
         assert bridge.calls.count(("bury",)) == 2, "a genuine repeat 3s apart must not be suppressed"
 
 
+class TestStaleQueueDrainedOnStateChange:
+    """The follow-up bug: a repeat is not always textually IDENTICAL to the line that just
+    graded, so duplicate-suppression alone does not catch it — e.g. the trailing tail of the
+    same physical utterance drifting into a different recognised word ("skip") right behind
+    the real command ("good") that already triggered a grade and advance. The fix is a hard
+    drain of whatever is queued at every state transition (front/back, next card, reattach),
+    not content matching. `backlog=` on FakeTranscriber models content already sitting in the
+    queue before the worker has read any of it — the real shape of a streaming burst."""
+
+    def test_a_different_stale_word_does_not_act_on_the_next_card(self):
+        from anki_voice_review.avr.stt import FakeTranscriber
+        from anki_voice_review.avr.tts import FakeSpeaker
+
+        cfg = Config(grading_mode="manual")
+        cards = [Card(1, "q one", "answer one"), Card(2, "q two", "answer two")]
+        bridge = FakeBridge(cards=cards)
+        w = worker_module.VoiceWorker(
+            cfg=cfg, bridge=bridge, on_phase=lambda *a: None, on_card=lambda *a: None,
+            on_heard=lambda *a: None, on_verdict=lambda *a: None, on_error=lambda *a: None,
+            on_finished=lambda *a: None,
+        )
+        w.tts = FakeSpeaker()
+        w.stt = FakeTranscriber(lines=[])
+
+        card = bridge.preflight()
+        w._execute(w.session.begin_card(card))
+        w._execute(w.session.on_line("my attempt done"))  # answer read back, awaiting a grade
+
+        # "good" (the real command) and a stray "skip" (a different word entirely — the tail
+        # of the same utterance drifting) are both already queued before the worker reads
+        # either of them.
+        w.stt._backlog = ["good", "skip"]
+        line = w.stt.get(0.01)
+        assert line == "good"
+        w._execute(w.session.on_line(line))  # grades card 1, advances to card 2, drains
+
+        assert w.stt.get(0.01) is None, "the stale backlog item must be gone, not delivered"
+        assert bridge.index == 1, "card 2 must still be waiting, not skipped"
+        assert not [c for c in bridge.calls if c[0] == "bury"]
+
+    def test_a_stale_command_does_not_act_right_after_the_flip(self):
+        # The other transition the user named explicitly: front->back. A leftover in the queue
+        # from before the flip must not act on the awaiting-grade state that follows it.
+        from anki_voice_review.avr.stt import FakeTranscriber
+        from anki_voice_review.avr.tts import FakeSpeaker
+
+        cfg = Config(grading_mode="manual")
+        bridge = FakeBridge()
+        w = worker_module.VoiceWorker(
+            cfg=cfg, bridge=bridge, on_phase=lambda *a: None, on_card=lambda *a: None,
+            on_heard=lambda *a: None, on_verdict=lambda *a: None, on_error=lambda *a: None,
+            on_finished=lambda *a: None,
+        )
+        w.tts = FakeSpeaker()
+        w.stt = FakeTranscriber(lines=[])
+
+        card = bridge.preflight()
+        w._execute(w.session.begin_card(card))
+
+        # "my attempt done" (flips to the back) and a stray "good" are both already queued
+        # ahead of the worker reading either.
+        w.stt._backlog = ["my attempt done", "good"]
+        line = w.stt.get(0.01)
+        assert line == "my attempt done"
+        w._execute(w.session.on_line(line))  # flips -> ShowAnswer -> drains
+
+        assert w.stt.get(0.01) is None, "the stale 'good' must not survive the flip"
+        assert not [c for c in bridge.calls if c[0] == "answer_card"], (
+            "nothing must be graded from audio heard before the flip"
+        )
+
+
 
 class TestRealWhisperLinesReachAnki:
     def test_timestamped_skip_buries(self):

@@ -137,6 +137,10 @@ class VoiceWorker(threading.Thread):
 
         elif isinstance(intent, ShowAnswer):
             self.bridge.show_answer()
+            # Front->back is a state change: anything still queued from the transcriber was
+            # recognised against the front, not whatever comes next (a grade, a correction). A
+            # leftover recognition must not act on the new state.
+            self._drain_stale()
 
         elif isinstance(intent, AnswerCard):
             self.bridge.answer_card(intent.ease)
@@ -184,9 +188,25 @@ class VoiceWorker(threading.Thread):
             card = self.bridge.current_card()
         except BridgeError:
             return
+        self._drain_stale()
         self._last_card_id = card.card_id
         self.on_card(card.question)
         self.session.resume_card(card)
+
+    def _drain_stale(self) -> None:
+        """Discard anything currently queued from the transcriber.
+
+        Called at every state transition (front/back, next card, reattach). Streaming
+        transcription keeps re-emitting the trailing audio window for as long as the utterance
+        stays in it — often past when it already triggered the grade that caused this
+        transition — so undrained, a leftover recognition arrives framed as a fresh command
+        against the NEW state and acts on it sight-unseen. This is a hard drain of whatever is
+        queued right now, not a time-based guess, so it costs nothing when there is nothing to
+        drop and cannot delay genuinely new speech.
+        """
+        dropped = self.stt.drain()
+        if dropped:
+            tracelog.write("drain", f"discarded {dropped} stale line(s) at state change")
 
     def _advance(self) -> list:
         # Answering is asynchronous; without waiting for the reviewer to present a fresh
@@ -205,6 +225,10 @@ class VoiceWorker(threading.Thread):
             self.on_error(str(exc))
             self._stopping.set()
             return []
+
+        # New card, new state. Whatever is still queued was recognised before this point, so it
+        # belongs to the card just left behind, not this one.
+        self._drain_stale()
 
         repeat = card.card_id == self._last_card_id
         self._last_card_id = card.card_id
