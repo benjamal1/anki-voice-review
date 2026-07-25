@@ -20,7 +20,23 @@ import threading
 import time
 from pathlib import Path
 
+from .cards import normalize
+
 log = logging.getLogger(__name__)
+
+# Streaming transcription (whisper_step_ms > 0) re-transcribes the trailing audio window on
+# every tick until the utterance slides out of it, so the SAME recognised text can arrive many
+# times in a row for one thing the user said once. Left unfiltered, every repeat re-fires
+# whatever command or grade that text triggers — including against a card the loop has since
+# advanced to, which silently mis-grades it rather than merely wasting a beat. A real second
+# utterance of the same word (someone genuinely repeating "undo" a few seconds later) is well
+# outside this window, so suppression only catches the streaming artifact.
+DUPLICATE_SUPPRESS_S = 2.5
+
+
+def is_duplicate_emission(prev: str, prev_at: float, text: str, now: float) -> bool:
+    """True if `text` is a same-window re-emission of `prev`, not new information."""
+    return bool(prev) and normalize(text) == normalize(prev) and (now - prev_at) < DUPLICATE_SUPPRESS_S
 
 # whisper-stream redraws its current line in place, so stdout carries terminal control codes.
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\r")
@@ -130,6 +146,11 @@ class Transcriber:
         self._queue: queue.Queue[str] = queue.Queue()
         self._reader: threading.Thread | None = None
         self._stopping = threading.Event()
+        self._last_text = ""
+        self._last_at = 0.0
+        # How many lines the duplicate filter has dropped. Exposed for diagnostics: if this
+        # climbs fast in a real session, streaming is re-emitting more than expected.
+        self.suppressed = 0
 
     def preflight(self) -> None:
         """Fail loudly and specifically before a session starts, not with a raw traceback."""
@@ -179,8 +200,14 @@ class Transcriber:
                 if self._stopping.is_set():
                     break
                 text = clean_line(raw)
-                if text:
-                    self._queue.put(text)
+                if not text:
+                    continue
+                now = time.monotonic()
+                if is_duplicate_emission(self._last_text, self._last_at, text, now):
+                    self.suppressed += 1
+                    continue
+                self._last_text, self._last_at = text, now
+                self._queue.put(text)
         except (ValueError, OSError):
             pass  # stream closed under us during shutdown
 
@@ -244,6 +271,9 @@ class FakeTranscriber:
         self._lines = list(lines)
         self._delay = delay
         self.drained = 0
+        self._last_text = ""
+        self._last_at = 0.0
+        self.suppressed = 0
 
     def start(self) -> None: ...
 
@@ -252,15 +282,21 @@ class FakeTranscriber:
     def preflight(self) -> None: ...
 
     def get(self, timeout: float) -> str | None:
-        # Apply clean_line just like the real _pump, so a test can inject raw whisper output
-        # (timestamps, noise markers) and exercise the actual parsing path. Skip empties, as
-        # the real reader does.
+        # Apply clean_line and the same duplicate-emission suppression as the real _pump, so a
+        # test can script a streaming re-emission (the same line several times in a row) and
+        # exercise the actual production filtering, not an idealised one-line-per-utterance feed.
         while self._lines:
             if self._delay:
                 time.sleep(self._delay)
             text = clean_line(self._lines.pop(0))
-            if text:
-                return text
+            if not text:
+                continue
+            now = time.monotonic()
+            if is_duplicate_emission(self._last_text, self._last_at, text, now):
+                self.suppressed += 1
+                continue
+            self._last_text, self._last_at = text, now
+            return text
         time.sleep(min(timeout, 0.01))
         return None
 

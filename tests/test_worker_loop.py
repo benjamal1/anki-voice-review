@@ -248,6 +248,76 @@ class TestQuit:
         assert ("bury",) not in bridge.calls, "nothing should run after quit"
 
 
+class TestStreamingDuplicateSuppression:
+    """Streaming transcription (whisper_step_ms > 0) re-transcribes the trailing audio window
+    on every tick until the utterance slides out of it, so whisper-stream can emit the exact
+    same recognised line several times in a row for one thing the user said once. Reproduced
+    and fixed at the transcriber boundary — FakeTranscriber applies the same duplicate filter
+    the real Transcriber does, so this drives the actual worker with no Anki or microphone."""
+
+    def test_a_repeated_terminated_line_grades_only_once(self):
+        cards = [Card(1, "q one", "answer one"), Card(2, "q two", "answer two")]
+        bridge, errors, _ = run_worker(
+            ["answer one done", "answer one done", "answer one done"], cards=cards
+        )
+        graded = [c for c in bridge.calls if c[0] == "answer_card"]
+        assert len(graded) == 1, f"a streaming re-emission must not grade twice, got {graded}"
+        assert errors == []
+
+    def test_a_repeat_does_not_cascade_into_the_next_card(self):
+        # Before the fix, every repeat re-fired the grade against whatever card the session was
+        # attached to at that instant — including the card the loop had already advanced to,
+        # silently grading it sight-unseen. That is "stuck on the grading screen, skips ahead"
+        # from the user's report, not a hang.
+        cards = [Card(1, "q one", "answer one"), Card(2, "q two", "answer two"), Card(3, "q three", "answer three")]
+        bridge, _, _ = run_worker(
+            ["answer one done", "answer one done", "answer one done"], cards=cards
+        )
+        assert bridge.index == 1, "only the first card should have been consumed"
+        assert bridge.calls.count(("show_answer",)) == 1, (
+            "the next card's answer must never be shown before the user has spoken to it"
+        )
+
+    def test_a_repeated_command_only_fires_once(self):
+        bridge, errors, _ = run_worker(["skip", "skip", "skip"])
+        assert len([c for c in bridge.calls if c[0] == "bury"]) == 1
+        assert errors == []
+
+    def test_a_repeated_manual_grade_only_fires_once(self):
+        cfg = Config(grading_mode="manual")
+        bridge, errors, _ = run_worker(
+            ["my attempt done", "good", "good", "good"], cfg=cfg
+        )
+        assert len([c for c in bridge.calls if c[0] == "answer_card"]) == 1
+        assert errors == []
+
+    def test_a_genuinely_later_repeat_still_works(self):
+        # A real second utterance of the same word — the user saying "skip" again a few
+        # seconds later, on a different card — is well outside the streaming re-emission window
+        # and must still go through. FakeTranscriber's delay simulates real elapsed time between
+        # lines, unlike the tight back-to-back loop the other tests in this class use.
+        from anki_voice_review.avr.stt import FakeTranscriber
+        from anki_voice_review.avr.tts import FakeSpeaker
+
+        cards = [Card(1, "q one", "answer one"), Card(2, "q two", "answer two")]
+        bridge = FakeBridge(cards=cards)
+        w = worker_module.VoiceWorker(
+            cfg=Config(), bridge=bridge, on_phase=lambda *a: None, on_card=lambda *a: None,
+            on_heard=lambda *a: None, on_verdict=lambda *a: None, on_error=lambda *a: None,
+            on_finished=lambda *a: None,
+        )
+        w.stt = FakeTranscriber(lines=["skip", "skip"], delay=3.0)
+        w.tts = FakeSpeaker()
+        card = bridge.preflight()
+        w._execute(w.session.begin_card(card))
+        while True:
+            line = w.stt.get(timeout=0.01)
+            if line is None:
+                break
+            w._execute(w.session.on_line(line))
+        assert bridge.calls.count(("bury",)) == 2, "a genuine repeat 3s apart must not be suppressed"
+
+
 
 class TestRealWhisperLinesReachAnki:
     def test_timestamped_skip_buries(self):

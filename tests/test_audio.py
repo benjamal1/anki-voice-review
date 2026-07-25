@@ -1,6 +1,6 @@
 """Audio adapters — line cleaning and the echo gate. No mic or speakers required."""
 
-from avr.stt import FakeTranscriber, clean_line
+from avr.stt import DUPLICATE_SUPPRESS_S, FakeTranscriber, clean_line, is_duplicate_emission
 from avr.tts import FakeSpeaker
 
 
@@ -34,6 +34,41 @@ class TestFakeTranscriber:
         assert stt.get(0.1) == "Paris"
         assert stt.get(0.1) == "done"
         assert stt.get(0.01) is None
+
+    def test_a_streaming_repeat_is_suppressed(self):
+        # Simulates whisper_step_ms > 0 re-transcribing the same trailing audio window several
+        # times in a row before anything new is said.
+        stt = FakeTranscriber(lines=["Good.", "Good.", "Good."])
+        assert stt.get(0.1) == "Good."
+        assert stt.get(0.01) is None, "the repeats must be dropped, not queued as new lines"
+        assert stt.suppressed == 2
+
+    def test_a_repeat_after_the_window_still_comes_through(self):
+        stt = FakeTranscriber(lines=["Good.", "Good."], delay=DUPLICATE_SUPPRESS_S + 0.2)
+        assert stt.get(0.1) == "Good."
+        assert stt.get(0.1) == "Good.", "outside the window, it is a real second utterance"
+
+    def test_a_different_line_is_never_suppressed(self):
+        stt = FakeTranscriber(lines=["Good.", "Again."])
+        assert stt.get(0.1) == "Good."
+        assert stt.get(0.1) == "Again."
+
+
+class TestIsDuplicateEmission:
+    def test_no_previous_line_is_never_a_duplicate(self):
+        assert not is_duplicate_emission("", 0.0, "Good.", 1.0)
+
+    def test_same_text_within_the_window_is_a_duplicate(self):
+        assert is_duplicate_emission("Good.", 10.0, "good", 10.5)
+
+    def test_case_and_punctuation_do_not_defeat_suppression(self):
+        assert is_duplicate_emission("good", 10.0, "Good!", 10.1)
+
+    def test_same_text_outside_the_window_is_not_a_duplicate(self):
+        assert not is_duplicate_emission("Good.", 10.0, "Good.", 10.0 + DUPLICATE_SUPPRESS_S + 1)
+
+    def test_different_text_is_never_a_duplicate(self):
+        assert not is_duplicate_emission("Good.", 10.0, "Again.", 10.1)
 
 
 class TestWhisperControlLines:

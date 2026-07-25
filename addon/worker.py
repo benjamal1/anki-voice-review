@@ -322,6 +322,7 @@ class VoiceWorker(threading.Thread):
             log.exception("voice worker failed")
             self.on_error(str(exc))
         finally:
+            tracelog.write("duplicate-lines-suppressed", str(self.stt.suppressed))
             self.stt.stop()
             self.on_phase(PHASE_STOPPED, "")
             self.on_finished(self._summary())

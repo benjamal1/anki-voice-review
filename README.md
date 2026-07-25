@@ -173,6 +173,7 @@ references are stripped before anything is spoken or graded.
 | Everything is graded incorrect | Check the transcript shown next to the verdict — if it is empty or garbled, whisper is not hearing you. Grant Anki microphone access. |
 | Sits on "Listening…" and nothing happens | `whisper-stream` exited, almost always a denied microphone. The window will say so. |
 | "Skip" says "buried 0 cards" | Another add-on (e.g. AJT Mortician) may be intercepting bury. The trace log records the bury count. |
+| A command fires repeatedly / it seems stuck grading and skips ahead | Streaming transcription re-emits the same recognised line every ~500ms until it slides out of the audio window; a repeat within ~2.5s of the same line is now suppressed automatically. The trace log's `duplicate-lines-suppressed` count at session end shows how many were caught. |
 | "Not ready" when pressing Start | Something required is missing — Settings shows which, and how to fix it. |
 
 ### Trace log
